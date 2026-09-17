@@ -166,5 +166,22 @@ await test("the delivered section separates a claim from an observation", async 
   return "provenance labelled in the registered prompt";
 });
 
+await test("a nonzero exit is surfaced even when only the output carries it", async () => {
+  const f = evidenceFields({ executions: [{ command: "npm test", status: "failed", output: "Exit code 2\nls: cannot access 'node_modules/.bin'" }] }, "S1");
+  assert(/failed/.test(f.executions), "a failed command does not say so");
+  assert(/exit 2/.test(f.executions), `the exit code in the output was not surfaced: ${f.executions}`);
+  return "status and exit code both shown";
+});
+
+await test("a wrapped command cannot pass its pipeline's success off as its own", async () => {
+  for (const cmd of ["npm test | tee /tmp/out.log", "npm run build | tail -5", "vitest run || true", "npm test; true"]) {
+    const f = evidenceFields({ executions: [{ command: cmd, status: "done", exitCode: 0 }] }, "S1");
+    assert(/status above is the pipeline's/.test(f.executions), `no caveat on: ${cmd}`);
+  }
+  const plain = evidenceFields({ executions: [{ command: "npm test", status: "done", exitCode: 0 }] }, "S1");
+  assert(!/status above is the pipeline's/.test(plain.executions), "a plain command was wrongly caveated");
+  return "4 wrapped commands caveated, a plain one left alone";
+});
+
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
 process.exit(results.every(Boolean) ? 0 : 1);

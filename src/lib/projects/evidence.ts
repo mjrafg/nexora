@@ -20,6 +20,22 @@ export type WorkEvidence = {
   executions?: { command: string; cwd?: string; status?: string; exitCode?: number; durationMs?: number; output?: string }[];
 };
 
+/**
+ * A command whose reported status belongs to something other than the work.
+ *
+ * `npm test | tee out.log` exits with tee's status, so a failing suite is
+ * recorded as a success. The engine cannot know what really failed, but it can
+ * refuse to let the Reviewer read the zero as proof — which is the whole point
+ * of showing execution records rather than prose.
+ */
+const WRAPPED = /\|\s*(tee|tail|head|cat|sed|awk|grep|less|more)\b|\|\s*\w+\s*>|;\s*(true|exit 0)\b|\|\|\s*true\b/;
+
+/** The exit status the runtime reported, when it put one in the output. */
+function exitFrom(output?: string): number | undefined {
+  const m = /^\s*Exit code (\d+)/m.exec(output ?? "");
+  return m ? Number(m[1]) : undefined;
+}
+
 const EXEC_CAP = 24;
 const OUT_CAP = 400;
 
@@ -30,7 +46,14 @@ export function evidenceFields(e: WorkEvidence, key: string): { snapshot: string
   const executions = runs.length
     ? runs
         .map((r) => {
-          const head = [`$ ${r.command.replace(/\s+/g, " ").slice(0, 220)}`, r.cwd ? `  in ${r.cwd}` : "", `  ${r.status ?? "?"}${r.exitCode === undefined ? "" : ` · exit ${r.exitCode}`}${r.durationMs ? ` · ${Math.round(r.durationMs / 100) / 10}s` : ""}`]
+          const code = r.exitCode ?? exitFrom(r.output);
+          const wrapped = WRAPPED.test(r.command) ? "  NOTE: this command pipes or chains its output, so the status above is the pipeline's, not necessarily that of the work inside it — do not read it as proof the inner command succeeded" : "";
+          const head = [
+            `$ ${r.command.replace(/\s+/g, " ").slice(0, 220)}`,
+            r.cwd ? `  in ${r.cwd}` : "",
+            `  ${r.status ?? "?"}${code === undefined ? "" : ` · exit ${code}`}${r.durationMs ? ` · ${Math.round(r.durationMs / 100) / 10}s` : ""}`,
+            wrapped,
+          ]
             .filter(Boolean)
             .join("\n");
           const out = r.output?.trim() ? `\n  ${r.output.trim().replace(/\s*\n\s*/g, "\n  ").slice(0, OUT_CAP)}${r.output.trim().length > OUT_CAP ? "\n  … (truncated; the session's full step record holds the rest)" : ""}` : "";
