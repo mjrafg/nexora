@@ -1,0 +1,169 @@
+/* ------------------------------------------------------------------
+   Git plumbing for project runs (ported from Tandem's director/engine.ts +
+   gitFlow.ts, simplified): integration branch, per-session worktrees,
+   dependency merges, checkpoints, fast-forward delivery, cleanup.
+   ------------------------------------------------------------------ */
+
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+
+export function git(dir: string, args: string[], timeoutMs = 30_000): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn("git", args, { cwd: dir, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
+    let out = "";
+    let err = "";
+    const t = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (err += d));
+    child.on("error", (e) => {
+      clearTimeout(t);
+      resolve({ ok: false, stdout: out, stderr: String(e) });
+    });
+    child.on("close", (code) => {
+      clearTimeout(t);
+      resolve({ ok: code === 0, stdout: out.trim(), stderr: err.trim() });
+    });
+  });
+}
+
+export async function isRepo(dir: string): Promise<boolean> {
+  return (await git(dir, ["rev-parse", "--is-inside-work-tree"])).ok;
+}
+
+export async function currentBranch(dir: string): Promise<string | null> {
+  const r = await git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  return r.ok && r.stdout !== "HEAD" ? r.stdout : null;
+}
+
+export async function hasCommits(dir: string): Promise<boolean> {
+  return (await git(dir, ["rev-parse", "--verify", "HEAD"])).ok;
+}
+
+/** Initialize a repo with a baseline commit when the directory is not one yet. */
+export async function ensureRepo(dir: string): Promise<void> {
+  if (await isRepo(dir)) {
+    if (!(await hasCommits(dir))) {
+      await git(dir, ["add", "-A"]);
+      await git(dir, ["-c", "user.name=Nexora OS", "-c", "user.email=nexora@agent24.io", "commit", "--allow-empty", "-m", "nexora: baseline"]);
+    }
+    return;
+  }
+  const init = await git(dir, ["init", "-q"]);
+  if (!init.ok) throw new Error(`git init failed: ${init.stderr}`);
+  await git(dir, ["add", "-A"]);
+  await git(dir, ["-c", "user.name=Nexora OS", "-c", "user.email=nexora@agent24.io", "commit", "--allow-empty", "-m", "nexora: baseline"]);
+}
+
+export function integrationBranchName(projectId: string): string {
+  return `nexora/${projectId.slice(0, 8)}/integration`;
+}
+
+/** Create the integration branch off the current base branch if missing; returns {integration, base}. */
+export async function ensureIntegrationBranch(dir: string, projectId: string): Promise<{ integration: string; base: string | null }> {
+  await ensureRepo(dir);
+  const integration = integrationBranchName(projectId);
+  const base = await currentBranch(dir);
+  const exists = (await git(dir, ["rev-parse", "--verify", `refs/heads/${integration}`])).ok;
+  if (!exists) {
+    const r = await git(dir, ["branch", integration]);
+    if (!r.ok) throw new Error(`Could not create ${integration}: ${r.stderr}`);
+  }
+  return { integration, base: base && base !== integration ? base : null };
+}
+
+export function worktreeDir(rootPath: string, projectId: string, key: string): string {
+  return path.join(path.dirname(rootPath), ".nexora-worktrees", `${path.basename(rootPath)}-${projectId.slice(0, 8)}`, key.toLowerCase().replace(/[^a-z0-9]+/g, "-"));
+}
+
+export function sessionBranchName(projectId: string, key: string): string {
+  return `nexora/${projectId.slice(0, 8)}/${key.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+}
+
+/** Ensure an isolated worktree for a session branch (created off the integration branch). */
+export async function ensureWorktree(rootPath: string, dir: string, branch: string, integration: string): Promise<void> {
+  if (fs.existsSync(path.join(dir, ".git"))) return;
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  const exists = (await git(rootPath, ["rev-parse", "--verify", `refs/heads/${branch}`])).ok;
+  const r = exists
+    ? await git(rootPath, ["worktree", "add", dir, branch], 60_000)
+    : await git(rootPath, ["worktree", "add", dir, "-b", branch, integration], 60_000);
+  if (!r.ok) throw new Error(`Could not create the session worktree: ${r.stderr}`);
+}
+
+/** Merge completed dependency branches into a session's checkout; returns what was merged. */
+export async function mergeDependencyBranches(dir: string, branches: string[]): Promise<string[]> {
+  const merged: string[] = [];
+  for (const b of branches) {
+    const already = await git(dir, ["merge-base", "--is-ancestor", b, "HEAD"]);
+    if (already.ok) continue;
+    const m = await git(dir, ["-c", "user.name=Nexora OS", "-c", "user.email=nexora@agent24.io", "merge", "--no-edit", b], 60_000);
+    if (!m.ok) {
+      await git(dir, ["merge", "--abort"]);
+      throw new Error(`Dependency branch ${b} does not merge cleanly: ${m.stderr.slice(-300)}`);
+    }
+    merged.push(b);
+  }
+  return merged;
+}
+
+/** Commit everything in the checkout as a checkpoint named after the request. Returns the commit hash or null. */
+export async function checkpoint(dir: string, request: string): Promise<string | null> {
+  await git(dir, ["add", "-A"]);
+  const status = await git(dir, ["status", "--porcelain"]);
+  if (!status.stdout.trim()) return null;
+  const msg = `nexora: ${request.replace(/\s+/g, " ").trim().slice(0, 72) || "checkpoint"}`;
+  const c = await git(dir, ["-c", "user.name=Nexora OS", "-c", "user.email=nexora@agent24.io", "commit", "-q", "-m", msg]);
+  if (!c.ok) return null;
+  return (await git(dir, ["rev-parse", "--short", "HEAD"])).stdout || null;
+}
+
+export type WorktreeSnapshot = { porcelain: string; head: string };
+
+export async function snapshot(dir: string): Promise<WorktreeSnapshot> {
+  const [p, h] = await Promise.all([git(dir, ["status", "--porcelain"]), git(dir, ["rev-parse", "HEAD"])]);
+  return { porcelain: p.stdout, head: h.stdout };
+}
+
+/** Files changed between two snapshots (uncommitted delta + commits made). */
+export async function changedFiles(dir: string, before: WorktreeSnapshot, after: WorktreeSnapshot): Promise<{ files: string[]; note: string }> {
+  const files = new Set<string>();
+  for (const line of after.porcelain.split("\n")) if (line.trim()) files.add(line.trim());
+  let note = "Uncommitted changes per `git status --porcelain` (status + path):";
+  if (before.head && after.head && before.head !== after.head) {
+    const diff = await git(dir, ["diff", "--name-status", `${before.head}..${after.head}`]);
+    for (const line of diff.stdout.split("\n")) if (line.trim()) files.add(line.trim());
+    note = "Changes committed during the run plus any uncommitted changes (status + path):";
+  }
+  return { files: [...files].slice(0, 200), note };
+}
+
+export async function isAncestor(dir: string, ancestor: string, descendant: string): Promise<boolean> {
+  return (await git(dir, ["merge-base", "--is-ancestor", ancestor, descendant])).ok;
+}
+
+/** Deliver: fast-forward base to integration and check base out. */
+export async function deliver(rootPath: string, integration: string, base: string): Promise<{ ok: boolean; message: string }> {
+  if (await isAncestor(rootPath, integration, base)) {
+    const co = await git(rootPath, ["checkout", base]);
+    return co.ok ? { ok: true, message: `${base} already contains ${integration}. The repository is on ${base}.` } : { ok: false, message: `Could not switch to ${base}: ${co.stderr}` };
+  }
+  if (!(await isAncestor(rootPath, base, integration))) {
+    return { ok: false, message: `${base} has commits that are not on ${integration} — a fast-forward is impossible. Launch a reconciliation session to merge ${integration} into ${base}, then deliver again.` };
+  }
+  const co = await git(rootPath, ["checkout", base]);
+  if (!co.ok) return { ok: false, message: `Could not switch to ${base}: ${co.stderr} — likely uncommitted local changes.` };
+  const ff = await git(rootPath, ["merge", "--ff-only", integration]);
+  if (!ff.ok) return { ok: false, message: `Fast-forward failed: ${ff.stderr}` };
+  return { ok: true, message: `Delivered — ${base} now equals ${integration}, and the repository is checked out on ${base}.` };
+}
+
+export async function removeWorktree(rootPath: string, dir: string): Promise<void> {
+  await git(rootPath, ["worktree", "remove", "--force", dir]);
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    /* gone */
+  }
+  await git(rootPath, ["worktree", "prune"]);
+}

@@ -1,26 +1,135 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  --color-bg: #070b14;
+  --color-bg-2: #0b1220;
+  --color-surface: rgba(255, 255, 255, 0.035);
+  --color-surface-2: rgba(255, 255, 255, 0.06);
+  --color-line: rgba(255, 255, 255, 0.08);
+  --color-line-2: rgba(255, 255, 255, 0.14);
+  --color-ink: #e8ecf5;
+  --color-ink-2: #aab2c5;
+  --color-ink-3: #6f7890;
+
+  --color-ceo: #f5b942;
+  --color-engineering: #4f8bff;
+  --color-operations: #3dd68c;
+  --color-sales: #ff8a3d;
+  --color-support: #2fd4e6;
+  --color-finance: #a78bfa;
+  --color-conference: #818cf8;
+  --color-brand: #6d7cff;
+  --color-danger: #ff5c7a;
+  --color-success: #3dd68c;
+  --color-warning: #f5b942;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background:
+    radial-gradient(1200px 600px at 18% -10%, rgba(109, 124, 255, 0.14), transparent 60%),
+    radial-gradient(900px 500px at 95% 5%, rgba(47, 212, 230, 0.08), transparent 55%),
+    linear-gradient(180deg, #080d19 0%, #070b14 60%, #05080f 100%);
+  font-feature-settings: "ss01", "cv11";
+}
+
+::selection {
+  background: rgba(109, 124, 255, 0.35);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+/*
+ * Glass panel.
+ *
+ * Deliberately WITHOUT backdrop-filter. What sits behind a card is the page's
+ * own static gradient, and blurring a smooth gradient returns the same
+ * gradient — measured on the live app, a card's tone changed by less than
+ * 0.2/255 with the blur removed. What it did cost was a compositing layer per
+ * card (five or more on a page), re-rasterised on every hover repaint, which
+ * is what made faint seams blink across the page as the pointer moved.
+ *
+ * Keep backdrop-filter only where content genuinely passes underneath glass:
+ * the sticky top bar and modal scrims.
+ */
+.glass {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--color-line);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 20px 40px -24px rgba(0, 0, 0, 0.6);
+}
+
+/*
+ * Surfaces that float ABOVE the page — dialogs, sheets, popovers. They are
+ * opaque on purpose: the scrim behind them supplies the depth, and anything
+ * see-through leaves the page's own text legible straight through the dialog.
+ */
+.glass-strong {
+  background: linear-gradient(180deg, #141a2b, #0d1220);
+  border: 1px solid var(--color-line-2);
+}
+
+.hairline {
+  border-color: var(--color-line);
+}
+
+.text-gradient {
+  background: linear-gradient(92deg, #ffffff 0%, #c7d2ff 55%, #8fa3ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.9); opacity: 0.7; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+.pulse-ring::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  border: 1px solid currentColor;
+  animation: pulse-ring 1.8s ease-out infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* Someone who has asked their system for less movement gets less movement,
+   everywhere — including the office floor, whose figures and screens are
+   decoration and never the way a status is communicated. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .pulse-ring::after { display: none; }
 }

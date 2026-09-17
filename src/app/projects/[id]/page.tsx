@@ -1,0 +1,278 @@
+"use client";
+
+import { use, useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, Pause, Play, Trash2, Loader2, Send, Boxes, Activity as ActivityIcon, ChevronDown, ChevronRight, GitBranch, CheckCircle2, XCircle, Circle, CircleDot, AlertTriangle } from "lucide-react";
+import { AppShell } from "@/components/layout/AppShell";
+import { Panel } from "@/components/ui/Panel";
+import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
+import { Markdown } from "@/components/ui/Markdown";
+import { ActivityFeed } from "@/components/agents/ActivityFeed";
+import { api, errorText, type ActivityEvent } from "@/lib/client-api";
+import { textDirection } from "@/lib/direction";
+import type { ProjectView, ProjectActivity, ProjectMessage, SessionRecord, MilestoneView } from "@/lib/projects/types";
+import { cn } from "@/lib/utils";
+
+const STATE_COLOR: Record<string, string> = {
+  PLANNING: "#818cf8", RUNNING: "#3dd68c", PAUSING: "#f5b942", PAUSED: "#6f7890", RESUMING: "#818cf8", COMPLETED: "#3dd68c", NEEDS_USER: "#f5b942", FAILED: "#ff5c7a",
+};
+const SESSION_COLOR: Record<string, string> = {
+  planned: "#6f7890", running: "#4f8bff", completed: "#3dd68c", failed: "#ff5c7a", timeout: "#f5b942", needs_attention: "#f5b942", paused: "#6f7890", abandoned: "#6f7890",
+};
+
+export default function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  const router = useRouter();
+  const [project, setProject] = useState<ProjectView | null>(null);
+  const [activity, setActivity] = useState<ProjectActivity[]>([]);
+  const [messages, setMessages] = useState<ProjectMessage[]>([]);
+  const [live, setLive] = useState<ActivityEvent[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<"milestones" | "activity" | "live">("milestones");
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await api.project(id);
+      setProject(r.project);
+      setActivity(r.activity);
+      setMessages(r.messages);
+      setError(null);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }, [id]);
+
+  useEffect(() => {
+    api.project(id).then((r) => { setProject(r.project); setActivity(r.activity); setMessages(r.messages); }).catch((e) => setError(errorText(e)));
+  }, [id]);
+
+  // Live stream: project-level status changes trigger a reload; tool/model events feed the live tab.
+  useEffect(() => {
+    const es = new EventSource(`/api/projects/${id}/activity`);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    es.onmessage = (m) => {
+      try {
+        const ev = JSON.parse(m.data) as ActivityEvent;
+        if (ev.kind === "status") {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => void load(), 400);
+        } else {
+          setLive((cur) => {
+            const i = cur.findIndex((x) => x.id === ev.id);
+            if (i >= 0) { const n = cur.slice(); n[i] = ev; return n; }
+            return [...cur.slice(-200), ev];
+          });
+        }
+      } catch { /* ignore */ }
+    };
+    return () => { es.close(); if (timer) clearTimeout(timer); };
+  }, [id, load]);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ block: "end" }); }, [messages.length]);
+
+  async function send() {
+    const text = draft.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    setDraft("");
+    try { await api.projectMessage(id, text); await load(); } catch (e) { setError(errorText(e)); setDraft(text); } finally { setBusy(false); }
+  }
+  async function pauseResume() {
+    if (!project) return;
+    setBusy(true);
+    try {
+      if (["PAUSED", "NEEDS_USER", "PAUSING"].includes(project.state)) await api.resumeProject(id); else await api.pauseProject(id);
+      await load();
+    } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
+  }
+  async function remove() {
+    if (!project || !window.confirm(`Delete project “${project.title}”? Running sessions are stopped. The repository is left as is.`)) return;
+    await api.deleteProject(id);
+    router.push("/projects");
+  }
+
+  if (error && !project) return <AppShell><div className="glass rounded-2xl p-4 text-[12.5px] text-[#ff8ea3]">{error}</div></AppShell>;
+  if (!project) return <AppShell><div className="flex items-center gap-2 text-[12.5px] text-ink-3"><Loader2 className="h-4 w-4 animate-spin" /> Loading project…</div></AppShell>;
+
+  const canPause = ["RUNNING", "RESUMING", "PLANNING"].includes(project.state);
+  const canResume = ["PAUSED", "NEEDS_USER"].includes(project.state);
+  const directorWorking = live.some((e) => e.turnId.startsWith("director:") && e.status === "running");
+
+  return (
+    <AppShell>
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <Link href="/projects" className="grid h-8 w-8 place-items-center rounded-lg border border-line text-ink-3 hover:text-ink"><ArrowLeft className="h-4 w-4" /></Link>
+        <div className="min-w-0 flex-1">
+          <h1 className="flex items-center gap-2 text-[20px] font-semibold tracking-tight">
+            <Boxes className="h-5 w-5 text-brand" /> {project.title}
+            <Badge color={STATE_COLOR[project.state]} dot>{project.state}</Badge>
+          </h1>
+          <p className="truncate font-mono text-[11px] text-ink-3">{project.rootPath}{project.integrationBranch ? ` · ${project.integrationBranch}` : ""}</p>
+        </div>
+        {(canPause || canResume) && (
+          <Button variant="ghost" size="sm" onClick={pauseResume} disabled={busy}>
+            {canResume ? <><Play className="h-3.5 w-3.5" /> Resume</> : <><Pause className="h-3.5 w-3.5" /> Pause</>}
+          </Button>
+        )}
+        <Button variant="danger" size="sm" onClick={remove}><Trash2 className="h-3.5 w-3.5" /></Button>
+      </div>
+      {error && <div className="mb-3 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-[#ff8ea3]">{error}</div>}
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
+        {/* Project Chat */}
+        <Panel title="Project Chat" subtitle={`Director: ${project.directorAgentName} · Builder: ${project.builderAgentName} · Reviewer: ${project.reviewerAgentName}`} className="flex min-h-[640px] flex-col" bodyClassName="flex-1 !p-0">
+          <div className="flex h-full min-h-[560px] flex-col">
+            <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+              {messages.map((m) => <ProjectBubble key={m.id} m={m} />)}
+              {directorWorking && (
+                <div className="inline-flex items-center gap-2 rounded-2xl rounded-tl-sm border border-line bg-white/[0.04] px-3 py-2 text-[12px] text-ink-3">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> {project.directorAgentName} is directing…
+                </div>
+              )}
+              <div ref={bottomRef} />
+            </div>
+            <form className="flex items-end gap-2 border-t border-line p-3" onSubmit={(e) => { e.preventDefault(); void send(); }}>
+              <textarea value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }} rows={2} dir="auto"
+                placeholder={project.state === "NEEDS_USER" ? "The Director is waiting for your answer…" : `Message the Director…`}
+                className="min-h-[44px] flex-1 resize-none rounded-xl border border-line bg-white/[0.04] px-3 py-2 text-[13px] outline-none placeholder:text-ink-3 focus:border-brand/60" disabled={busy || project.state === "COMPLETED"} />
+              <Button type="submit" variant="primary" size="md" disabled={busy || !draft.trim()}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</Button>
+            </form>
+          </div>
+        </Panel>
+
+        {/* Drawer */}
+        <Panel title="Plan & sessions" subtitle={`${project.milestones.length} milestones · ${project.counts.completed}/${project.counts.sessions} sessions completed`} bodyClassName="!pt-0">
+          <div className="mb-2 flex gap-1 border-b border-line text-[12px]">
+            {(["milestones", "activity", "live"] as const).map((t) => (
+              <button key={t} onClick={() => setTab(t)} className={cn("border-b-2 px-2.5 py-1.5 capitalize", tab === t ? "border-brand text-ink" : "border-transparent text-ink-3 hover:text-ink-2")}>{t}</button>
+            ))}
+          </div>
+          {tab === "milestones" && (
+            project.milestones.length === 0 ? <p className="text-[12px] text-ink-3">No plan yet — the Director is working on it.</p> :
+            <div className="space-y-2">{project.milestones.map((m) => <MilestoneCard key={m.id} m={m} />)}</div>
+          )}
+          {tab === "activity" && (
+            <div className="max-h-[560px] space-y-1 overflow-y-auto">
+              {activity.map((a) => <ActivityRow key={a.id} a={a} />)}
+              {activity.length === 0 && <p className="text-[12px] text-ink-3">Nothing yet.</p>}
+            </div>
+          )}
+          {tab === "live" && (
+            <div className="max-h-[560px] overflow-y-auto">
+              {live.length ? <ActivityFeed events={live} live /> : <p className="text-[12px] text-ink-3">Tool calls and commands appear here as agents work.</p>}
+            </div>
+          )}
+        </Panel>
+      </div>
+    </AppShell>
+  );
+}
+
+function ProjectBubble({ m }: { m: ProjectMessage }) {
+  const [open, setOpen] = useState(false);
+  if (m.role === "observation") {
+    return (
+      <div className="rounded-lg border border-dashed border-line px-3 py-1.5 text-[11px] text-ink-3">
+        <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-1.5 text-left">
+          {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          <ActivityIcon className="h-3 w-3" /> Engine observation delivered to the Director
+        </button>
+        {open && <pre className="mt-1.5 whitespace-pre-wrap break-words text-[10.5px] text-ink-2">{m.content}</pre>}
+      </div>
+    );
+  }
+  const mine = m.role === "user";
+  return (
+    <div className={cn("flex", mine && "justify-end")}>
+      <div className={cn("min-w-0", mine ? "max-w-[78%]" : "max-w-[92%]")}>
+        <div dir={mine || m.error ? textDirection(m.content) : undefined} className={cn("rounded-2xl px-3 py-2 text-start text-[13px] leading-relaxed", mine ? "whitespace-pre-wrap rounded-tr-sm bg-gradient-to-b from-[#6d7cff] to-[#5563e8] text-white" : m.error ? "whitespace-pre-wrap rounded-tl-sm border border-danger/30 bg-danger/10 text-[#ff8ea3]" : "rounded-tl-sm border border-line bg-white/[0.04] text-ink-2")}>
+          {mine || m.error ? m.content : <Markdown>{m.content}</Markdown>}
+        </div>
+        {m.toolCalls && m.toolCalls.length > 0 && (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {m.toolCalls.map((t, i) => (
+              <span key={i} className={cn("inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px]", t.ok ? "border-line text-ink-3" : "border-danger/30 text-[#ff8ea3]")} title={t.summary}>
+                {t.ok ? <CheckCircle2 className="h-2.5 w-2.5 text-[#5fe3a3]" /> : <XCircle className="h-2.5 w-2.5" />} {t.tool}
+              </span>
+            ))}
+          </div>
+        )}
+        <div className={cn("mt-1 text-[10px] text-ink-3", mine && "text-right")}>{new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+      </div>
+    </div>
+  );
+}
+
+function MilestoneCard({ m }: { m: MilestoneView }) {
+  const [open, setOpen] = useState(true);
+  const Icon = m.status === "completed" ? CheckCircle2 : m.status === "planned" ? Circle : CircleDot;
+  return (
+    <div className="rounded-lg border border-line bg-white/[0.02]">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 px-2.5 py-2 text-left">
+        <Icon className={cn("h-3.5 w-3.5 shrink-0", m.status === "completed" ? "text-[#5fe3a3]" : m.status === "planned" ? "text-ink-3" : "text-brand")} />
+        <span className="font-mono text-[11px] text-ink-3">{m.key}</span>
+        <span className="truncate text-[12.5px] font-medium text-ink">{m.name}</span>
+        <span className="ml-auto text-[10.5px] text-ink-3">{m.status}{m.dependsOn.length ? ` · after ${m.dependsOn.join(", ")}` : ""}</span>
+      </button>
+      {open && (
+        <div className="border-t border-line px-2.5 py-2">
+          <p className="text-[11.5px] text-ink-2">{m.goal}</p>
+          {m.acceptance && <p className="mt-1 text-[10.5px] text-ink-3"><span className="text-ink-2">Acceptance:</span> {m.acceptance}</p>}
+          {m.sessions.length > 0 && <div className="mt-2 space-y-1">{m.sessions.map((s) => <SessionRow key={s.id} s={s} />)}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SessionRow({ s }: { s: SessionRecord }) {
+  const [open, setOpen] = useState(false);
+  const color = SESSION_COLOR[s.status] ?? "#6f7890";
+  return (
+    <div className="rounded-md border border-line/70 bg-black/20">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[11.5px]">
+        {s.status === "running" ? <Loader2 className="h-3 w-3 animate-spin text-brand" /> : s.status === "needs_attention" || s.status === "failed" || s.status === "timeout" ? <AlertTriangle className="h-3 w-3 text-warning" /> : <span className="h-2 w-2 rounded-full" style={{ background: color }} />}
+        <span className="font-mono text-ink-3">{s.key}</span>
+        <span className="truncate text-ink">{s.name}</span>
+        <span className="ml-auto flex items-center gap-1.5 text-[10px] text-ink-3">
+          {s.branch && <GitBranch className="h-3 w-3" />}
+          {s.lastVerdict && <span className={s.lastVerdict === "pass" ? "text-[#5fe3a3]" : "text-warning"}>review {s.lastVerdict} · {s.reviewsConsumed}/2</span>}
+          <span style={{ color }}>{s.status.replace("_", " ")}</span>
+        </span>
+      </button>
+      {open && (
+        <div className="space-y-1.5 border-t border-line/70 px-2 py-1.5 text-[11px]">
+          <div className="text-ink-2">{s.purpose}</div>
+          {s.dependsOn.length > 0 && <div className="text-ink-3">Depends on {s.dependsOn.join(", ")}</div>}
+          {s.resultSummary && <div><div className="text-[9.5px] uppercase tracking-wide text-ink-3">Result</div><div className="whitespace-pre-wrap text-ink-2">{s.resultSummary.slice(0, 800)}</div></div>}
+          {s.lastFindings.length > 0 && (
+            <div><div className="text-[9.5px] uppercase tracking-wide text-ink-3">Last findings</div>
+              <ul className="list-disc pl-4 text-ink-2">{s.lastFindings.map((f, i) => <li key={i}><span className={f.severity === "major" ? "text-[#ff8ea3]" : "text-warning"}>[{f.severity}]</span> {f.title}{f.file ? <span className="font-mono text-ink-3"> — {f.file}{f.line ? `:${f.line}` : ""}</span> : null}</li>)}</ul>
+            </div>
+          )}
+          {s.errorText && <div className="text-[#ff8ea3]">{s.errorText}</div>}
+          <details><summary className="cursor-pointer text-ink-3">Builder prompt</summary><pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap text-[10.5px] text-ink-2">{s.prompt}</pre></details>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ActivityRow({ a }: { a: ProjectActivity }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-md border border-line/70 bg-black/10 px-2 py-1 text-[11px]">
+      <button type="button" onClick={() => a.detail && setOpen((o) => !o)} className="flex w-full items-start gap-2 text-left">
+        <span className="shrink-0 num text-ink-3">{new Date(a.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+        <span className="shrink-0 rounded bg-white/[0.06] px-1 text-[9.5px] uppercase text-ink-3">{a.kind}</span>
+        <span className="text-ink-2">{a.text}</span>
+      </button>
+      {open && a.detail && <pre className="mt-1 whitespace-pre-wrap break-words text-[10.5px] text-ink-3">{a.detail}</pre>}
+    </div>
+  );
+}

@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# nexora local data (agents, conversations, secrets)
+/data/
+.nexora-restart-sandbox/
+.nexora-sandbox/
+sandbox-build.log

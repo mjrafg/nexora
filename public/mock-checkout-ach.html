@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Northwind Supplies — Pay by bank (ACH)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#f4f5f8;margin:0;color:#111}
+.wrap{max-width:520px;margin:48px auto;background:#fff;border-radius:14px;padding:32px;box-shadow:0 10px 30px rgba(0,0,0,.08)}
+h1{font-size:20px;margin:0 0 4px}.sub{color:#666;margin:0 0 20px}
+label{display:block;font-size:12px;color:#444;margin:12px 0 4px}input,select{width:100%;padding:10px;border:1px solid #d5d8e0;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff}
+button{margin-top:18px;width:100%;padding:12px;border:0;border-radius:10px;background:#1f9e6a;color:#fff;font-size:15px;font-weight:600;cursor:pointer}
+.total{display:flex;justify-content:space-between;font-weight:600;margin-top:16px;padding-top:12px;border-top:1px solid #eee}
+.note{font-size:12px;color:#777;margin-top:8px}
+#done{display:none}.ok{background:#e9fbf0;border:1px solid #9fe3b8;padding:16px;border-radius:10px}.err{color:#b00020;font-size:13px;margin-top:8px;display:none}
+</style></head><body><div class="wrap">
+<div id="form">
+<h1>Northwind Supplies</h1><p class="sub">Invoice NW-4471 · Office equipment</p>
+<div class="total"><span>Total due</span><span>$4.00</span></div>
+<p class="note">This vendor accepts bank transfer (ACH) only. Card payments are not available.</p>
+<form id="f" onsubmit="return pay(event)">
+<label for="holder">Account holder name</label><input name="holder" id="holder" required>
+<label for="routing">Routing number</label><input name="routing" id="routing" inputmode="numeric" required>
+<label for="account">Account number</label><input name="account" id="account" inputmode="numeric" required>
+<label for="acctype">Account type</label><select name="acctype" id="acctype" required><option value="">Select…</option><option value="checking">Checking</option><option value="savings">Savings</option></select>
+<button type="submit" id="payBtn">Pay $4.00 by bank transfer</button>
+<div class="err" id="err">Please fill every field.</div>
+</form></div>
+<div id="done" class="ok"><h1>Bank payment authorized</h1><p>Thank you. Your reference is <strong id="ref"></strong>. $4.00 will be debited from the <strong id="type"></strong> account ending <strong id="l4"></strong> (routing ending <strong id="r4"></strong>).</p></div>
+</div>
+<script>
+let submitted=false;
+function pay(e){e.preventDefault(); if(submitted) return false; const routing=document.getElementById('routing').value.replace(/\D/g,''); const account=document.getElementById('account').value.replace(/\D/g,''); const type=document.getElementById('acctype').value; if(routing.length!==9||account.length<4||!type||!document.getElementById('holder').value.trim()){document.getElementById('err').style.display='block'; return false;} submitted=true; const ref='NW-'+Math.random().toString(36).slice(2,8).toUpperCase(); document.getElementById('ref').textContent=ref; document.getElementById('l4').textContent=account.slice(-4); document.getElementById('r4').textContent=routing.slice(-4); document.getElementById('type').textContent=type; document.getElementById('form').style.display='none'; document.getElementById('done').style.display='block'; document.title='Payment '+ref+' authorized'; return false;}
+</script></body></html>

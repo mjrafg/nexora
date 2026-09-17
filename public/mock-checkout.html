@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Acme Cloud — Checkout</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#f4f5f8;margin:0;color:#111}
+.wrap{max-width:520px;margin:48px auto;background:#fff;border-radius:14px;padding:32px;box-shadow:0 10px 30px rgba(0,0,0,.08)}
+h1{font-size:20px;margin:0 0 4px}.sub{color:#666;margin:0 0 20px}
+label{display:block;font-size:12px;color:#444;margin:12px 0 4px}input,select{width:100%;padding:10px;border:1px solid #d5d8e0;border-radius:8px;font-size:14px;box-sizing:border-box}
+.row{display:flex;gap:10px}.row>div{flex:1}
+button{margin-top:18px;width:100%;padding:12px;border:0;border-radius:10px;background:#3b5bff;color:#fff;font-size:15px;font-weight:600;cursor:pointer}
+.total{display:flex;justify-content:space-between;font-weight:600;margin-top:16px;padding-top:12px;border-top:1px solid #eee}
+#done{display:none}.ok{background:#e9fbf0;border:1px solid #9fe3b8;padding:16px;border-radius:10px}
+</style></head><body><div class="wrap">
+<div id="form">
+<h1>Acme Cloud Pro</h1><p class="sub">Monthly subscription · billed today</p>
+<div class="total"><span>Total due</span><span>$3.00</span></div>
+<form id="f" onsubmit="return pay(event)">
+<label for="name">Cardholder name</label><input name="name" id="name" required>
+<label for="card">Card number</label><input name="card" id="card" inputmode="numeric" required>
+<div class="row"><div><label for="month">Expiry month</label><input name="month" id="month" placeholder="MM" required></div><div><label for="year">Expiry year</label><input name="year" id="year" placeholder="YYYY" required></div><div><label for="cvv">CVV</label><input name="cvv" id="cvv" type="password"></div></div>
+<label for="zip">Billing ZIP</label><input name="zip" id="zip">
+<button type="submit" id="payBtn">Pay $3.00</button>
+</form></div>
+<div id="done" class="ok"><h1>Payment confirmed</h1><p>Thank you. Your order reference is <strong id="ref"></strong>. Amount charged: <strong>$3.00</strong> to card ending <strong id="l4"></strong>.</p></div>
+</div>
+<script>
+let submitted=false;
+function pay(e){e.preventDefault(); if(submitted) return false; submitted=true; const card=document.getElementById('card').value.replace(/\D/g,''); if(card.length<12){alert('Invalid card'); submitted=false; return false;} const ref='ACME-'+Math.random().toString(36).slice(2,8).toUpperCase(); document.getElementById('ref').textContent=ref; document.getElementById('l4').textContent=card.slice(-4); document.getElementById('form').style.display='none'; document.getElementById('done').style.display='block'; document.title='Order '+ref+' confirmed'; return false;}
+</script></body></html>

@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "nexora-dev",
+      "runtimeExecutable": "/Users/mjrafg/.local/node/bin/npm",
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
+      "port": 3111,
+      "autoPort": true,
+      "env": {
+        "PATH": "/Users/mjrafg/.local/node/bin:/Users/mjrafg/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "NEXORA_BROWSER_TEST_HOOKS": "1"
+      }
+    }
+  ]
+}

@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // throwaway copies of the app that the test harnesses build and delete
+    ".nexora-sandbox/**",
+    ".nexora-restart-sandbox/**",
   ]),
 ]);
 

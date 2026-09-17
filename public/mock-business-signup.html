@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Vantage Cloud — Create your business account</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#f4f5f8;margin:0;color:#111}
+.wrap{max-width:560px;margin:40px auto;background:#fff;border-radius:14px;padding:32px;box-shadow:0 10px 30px rgba(0,0,0,.08)}
+h1{font-size:20px;margin:0 0 4px}.sub{color:#666;margin:0 0 18px}
+label{display:block;font-size:12px;color:#444;margin:12px 0 4px}
+input,select{width:100%;padding:10px;border:1px solid #d5d8e0;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff}
+.row{display:flex;gap:10px}.row>div{flex:1}
+button{margin-top:18px;width:100%;padding:12px;border:0;border-radius:10px;background:#3b5bff;color:#fff;font-size:15px;font-weight:600;cursor:pointer}
+.err{color:#b00020;font-size:13px;margin-top:10px;display:none}
+#done{display:none}.ok{background:#e9fbf0;border:1px solid #9fe3b8;padding:16px;border-radius:10px}
+.note{font-size:12px;color:#777;margin-top:6px}
+</style></head><body><div class="wrap">
+<div id="form">
+<h1>Create your Vantage Cloud business account</h1>
+<p class="sub">Tell us about your company. All fields are required.</p>
+<form id="f" onsubmit="return submitForm(event)">
+<label for="company">Company name</label><input name="company" id="company" required>
+<label for="website">Company website</label><input name="website" id="website" placeholder="https://" required>
+<label for="email">Business email</label><input name="email" id="email" type="email" required>
+<label for="phone">Business phone</label><input name="phone" id="phone" required>
+<label for="industry">Industry</label><input name="industry" id="industry" required>
+<label for="street">Street address</label><input name="street" id="street" required>
+<div class="row">
+  <div><label for="city">City</label><input name="city" id="city" required></div>
+  <div><label for="state">State / Region</label><input name="state" id="state" required></div>
+  <div><label for="zip">ZIP / Postal code</label><input name="zip" id="zip" required></div>
+</div>
+<label for="country">Country</label><input name="country" id="country" required>
+<button type="submit" id="createBtn">Create business account</button>
+<div class="err" id="err">Please complete every field before continuing.</div>
+</form></div>
+<div id="done" class="ok"><h1>Business account created</h1><p>Welcome, <strong id="who"></strong>. Your account reference is <strong id="ref"></strong>. A confirmation was sent to <strong id="mail"></strong>.</p></div>
+</div>
+<script>
+let submitted=false;
+function submitForm(e){e.preventDefault(); if(submitted) return false;
+ const ids=['company','website','email','phone','industry','street','city','state','zip','country'];
+ for(const id of ids){ if(!document.getElementById(id).value.trim()){ document.getElementById('err').style.display='block'; return false; } }
+ submitted=true;
+ const ref='VC-'+Math.random().toString(36).slice(2,8).toUpperCase();
+ document.getElementById('who').textContent=document.getElementById('company').value;
+ document.getElementById('mail').textContent=document.getElementById('email').value;
+ document.getElementById('ref').textContent=ref;
+ document.getElementById('form').style.display='none';
+ document.getElementById('done').style.display='block';
+ document.title='Vantage account '+ref+' created';
+ return false;}
+</script></body></html>
