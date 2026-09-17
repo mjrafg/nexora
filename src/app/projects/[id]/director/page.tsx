@@ -87,8 +87,9 @@ export default function DirectorPage({ params }: { params: Promise<{ id: string 
   if (!project) return <AppShell><div className="flex items-center gap-2 text-[12.5px] text-ink-3"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div></AppShell>;
 
   return (
-    <AppShell>
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+    // the decisions scroll inside their panel; the header stays where it is
+    <AppShell workspace>
+      <div className="mb-3 flex shrink-0 flex-wrap items-center gap-2">
         <Link href={`/projects/${id}`} className="rounded-lg p-1.5 text-ink-3 hover:bg-white/[0.06] hover:text-ink" aria-label="Back to the project">
           <ArrowLeft className="h-4 w-4" />
         </Link>
@@ -101,12 +102,12 @@ export default function DirectorPage({ params }: { params: Promise<{ id: string 
           </a>
         </div>
       </div>
-      <p className="mb-4 text-[12.5px] text-ink-3">
+      <p className="mb-4 shrink-0 text-[12.5px] text-ink-3">
         <Link href={`/projects/${id}`} className="hover:text-ink-2">{project.title}</Link> · every decision, with the steps behind it
       </p>
 
-      <Panel title="Decisions" subtitle={`${messages.filter((m) => m.role === "assistant").length} replies · ${messages.filter((m) => m.role === "observation").length} engine observations`}>
-        <div className="space-y-3">
+      <Panel title="Decisions" subtitle={`${messages.filter((m) => m.role === "assistant").length} replies · ${messages.filter((m) => m.role === "observation").length} engine observations`} className="flex min-h-0 flex-1 flex-col" bodyClassName="flex min-h-0 flex-1 flex-col">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pe-1">
           {messages.map((m) => <Turn key={m.id} m={m} director={project.directorAgentName} />)}
           {working && (
             <div className="rounded-xl border border-brand/30 bg-brand/[0.04] p-2.5">

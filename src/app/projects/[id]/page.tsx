@@ -118,8 +118,11 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
   const directorWorking = live.some((e) => e.turnId.startsWith("director:") && e.status === "running");
 
   return (
-    <AppShell>
-      <div className="mb-4 flex flex-wrap items-center gap-3">
+    // an application frame: the page itself never scrolls, so the transcript
+    // and the plan each scroll inside their own panel instead of dragging the
+    // whole project out of view
+    <AppShell workspace>
+      <div className="mb-4 flex shrink-0 flex-wrap items-center gap-3">
         <Link href="/projects" className="grid h-8 w-8 place-items-center rounded-lg border border-line text-ink-3 hover:text-ink"><ArrowLeft className="h-4 w-4" /></Link>
         <div className="min-w-0 flex-1">
           <h1 className="flex items-center gap-2 text-[20px] font-semibold tracking-tight">
@@ -144,10 +147,10 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
       </div>
       {error && <div className="mb-3 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-[#ff8ea3]">{error}</div>}
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto xl:grid-cols-[minmax(0,1fr)_400px] xl:overflow-hidden">
         {/* Project Chat */}
-        <Panel title="Project Chat" subtitle={`Director: ${project.directorAgentName} · Builder: ${project.builderAgentName} · Reviewer: ${project.reviewerAgentName}`} className="flex min-h-[640px] flex-col" bodyClassName="flex-1 !p-0">
-          <div className="flex h-full min-h-[560px] flex-col">
+        <Panel title="Project Chat" subtitle={`Director: ${project.directorAgentName} · Builder: ${project.builderAgentName} · Reviewer: ${project.reviewerAgentName}`} className="flex min-h-[420px] flex-col xl:min-h-0" bodyClassName="flex-1 !p-0 min-h-0">
+          <div className="flex h-full min-h-0 flex-col">
             <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
               {messages.map((m) => <ProjectBubble key={m.id} m={m} />)}
               {directorWorking && (
@@ -167,23 +170,26 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
         </Panel>
 
         {/* Drawer */}
-        <Panel title="Plan & sessions" subtitle={`${project.milestones.length} milestones · ${project.counts.completed}/${project.counts.sessions} sessions completed`} bodyClassName="!pt-0">
-          <div className="mb-2 flex gap-1 border-b border-line text-[12px]">
+        <Panel title="Plan & sessions" subtitle={`${project.milestones.length} milestones · ${project.counts.completed}/${project.counts.sessions} sessions completed`} className="flex min-h-0 flex-col" bodyClassName="!pt-0 flex min-h-0 flex-1 flex-col">
+          {/* the tabs stay put; only what they show scrolls */}
+          <div className="mb-2 flex shrink-0 gap-1 border-b border-line text-[12px]">
             {(["milestones", "activity", "live"] as const).map((t) => (
               <button key={t} onClick={() => setTab(t)} className={cn("border-b-2 px-2.5 py-1.5 capitalize", tab === t ? "border-brand text-ink" : "border-transparent text-ink-3 hover:text-ink-2")}>{t}</button>
             ))}
           </div>
-          {tab === "milestones" && (
-            project.milestones.length === 0 ? <p className="text-[12px] text-ink-3">No plan yet — the Director is working on it.</p> :
-            <div className="space-y-2">{project.milestones.map((m) => <MilestoneCard key={m.id} m={m} project={project} names={names} onStopped={load} />)}</div>
-          )}
-          {tab === "activity" && (
-            <div className="max-h-[560px] space-y-1 overflow-y-auto">
-              {activity.map((a) => <ActivityRow key={a.id} a={a} />)}
-              {activity.length === 0 && <p className="text-[12px] text-ink-3">Nothing yet.</p>}
-            </div>
-          )}
-          {tab === "live" && <LiveTab events={live} />}
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {tab === "milestones" && (
+              project.milestones.length === 0 ? <p className="text-[12px] text-ink-3">No plan yet — the Director is working on it.</p> :
+              <div className="space-y-2">{project.milestones.map((m) => <MilestoneCard key={m.id} m={m} project={project} names={names} onStopped={load} />)}</div>
+            )}
+            {tab === "activity" && (
+              <div className="space-y-1">
+                {activity.map((a) => <ActivityRow key={a.id} a={a} />)}
+                {activity.length === 0 && <p className="text-[12px] text-ink-3">Nothing yet.</p>}
+              </div>
+            )}
+            {tab === "live" && <LiveTab events={live} />}
+          </div>
         </Panel>
       </div>
     </AppShell>
@@ -221,7 +227,7 @@ function LiveTab({ events }: { events: ActivityEvent[] }) {
   const actors = [...new Set(events.map((e) => e.actor?.name).filter(Boolean) as string[])];
   const shown = who === "all" ? events : events.filter((e) => e.actor?.name === who);
   return (
-    <div className="max-h-[560px] overflow-y-auto">
+    <div>
       <WorkingNow events={events} />
       {actors.length > 1 && (
         <div className="mb-2 flex flex-wrap gap-1 text-[11px]">

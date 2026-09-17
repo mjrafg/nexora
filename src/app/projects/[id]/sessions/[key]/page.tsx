@@ -138,8 +138,9 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
   const builder = session.agentId ? names[session.agentId] ?? session.agentId : project.builderAgentName;
 
   return (
-    <AppShell>
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+    // the timeline scrolls inside its panel rather than growing the page
+    <AppShell workspace>
+      <div className="mb-3 flex shrink-0 flex-wrap items-center gap-2">
         <Link href={`/projects/${id}`} className="rounded-lg p-1.5 text-ink-3 hover:bg-white/[0.06] hover:text-ink" aria-label="Back to the project">
           <ArrowLeft className="h-4 w-4" />
         </Link>
@@ -163,25 +164,25 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
           </a>
         </div>
       </div>
-      <p className="mb-4 text-[12.5px] text-ink-3">
+      <p className="mb-4 shrink-0 text-[12.5px] text-ink-3">
         <Link href={`/projects/${id}`} className="hover:text-ink-2">{project.title}</Link> · {session.purpose}
       </p>
 
       {error && <div className="glass mb-3 rounded-2xl p-3 text-[12.5px] text-[#ff8ea3]">{error}</div>}
 
-      <div className="flex min-h-0 gap-4">
-      <div className={cn("grid min-w-0 flex-1 gap-4", !dockAgent && "xl:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]")}>
-        <Panel title="What the agents did" subtitle={runningNow ? "live — updating as it works" : `${steps.length} step${steps.length === 1 ? "" : "s"}, kept with the session`}>
+      <div className="flex min-h-0 flex-1 gap-4">
+      <div className={cn("grid min-w-0 flex-1 gap-4 overflow-y-auto xl:overflow-hidden", !dockAgent && "xl:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]")}>
+        <Panel title="What the agents did" subtitle={runningNow ? "live — updating as it works" : `${steps.length} step${steps.length === 1 ? "" : "s"}, kept with the session`} className="flex min-h-[360px] flex-col xl:min-h-0" bodyClassName="flex min-h-0 flex-1 flex-col">
           {steps.length === 0 ? (
             <p className="text-[12px] text-ink-3">
               {runningNow ? "Waiting for the first step…" : "No steps were kept for this session. Runs from before steps were recorded have only their summary."}
             </p>
           ) : (
-            <div className="max-h-[calc(100vh-260px)] overflow-y-auto"><ActivityFeed events={steps} grouped live={runningNow} /></div>
+            <div className="min-h-0 flex-1 overflow-y-auto"><ActivityFeed events={steps} grouped live={runningNow} /></div>
           )}
         </Panel>
 
-        <div className="space-y-4">
+        <div className="min-h-0 space-y-4 xl:overflow-y-auto xl:pe-1">
           <Panel title="This session">
             <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-[11.5px]">
               <Fact k="Builder" v={builder} />
@@ -298,7 +299,9 @@ function Given({ role, who, agent, attached, grant, skills, servers }: {
           ? skills.map((n) => <Chip key={n} tone="#6d7cff">{n}</Chip>)
           : <span className="text-ink-3">none selected</span>}
       </Line>
-      <Line k="Could reach this session">
+      {/* only a session that recorded its set can say what the turn could reach;
+          an older one can only say what the agent carries, and should say which */}
+      <Line k={attached ? "Could reach this session" : "Agent holds (not recorded per session)"}>
         {own.length ? own.map((t) => <Chip key={t} tone="#aab2c5">{label(t)}</Chip>) : <span className="text-ink-3">none</span>}
       </Line>
       {withheld.length > 0 && (
