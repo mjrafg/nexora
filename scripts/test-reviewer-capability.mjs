@@ -89,8 +89,13 @@ await test("a Reviewer still cannot write, spend, or use company logins", async 
 });
 
 await test("a session grant reaches the Reviewer, and a Builder is unaffected", async () => {
+  // the live run caught this: the narrowing kept run_commands when the AGENT
+  // held it, but session grants were passed to the Builder only, so a Director
+  // granting commands to a session left its Reviewer with Read/Glob/Grep
   const granted = turnCapabilities(agent(["read_files", "browser"]), "reviewer", ["run_commands"]);
   assert(granted.permissions.includes("run_commands"), "a Director grant did not reach the Reviewer");
+  const overreach = turnCapabilities(agent(["read_files"]), "reviewer", ["write_files", "payments", "credentials"]);
+  for (const b of ["write_files", "payments", "credentials"]) assert(!overreach.permissions.includes(b), `${b} reached the Reviewer through a session grant`);
   const b = turnCapabilities(agent(["read_files", "write_files", "run_commands", "browser"]), "builder");
   for (const p of ["read_files", "write_files", "run_commands", "browser"]) assert(b.permissions.includes(p), `builder lost ${p}`);
   return "grant honoured, builder untouched";

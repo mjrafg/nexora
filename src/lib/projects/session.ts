@@ -332,7 +332,17 @@ async function buildAndReview(a: {
    */
   const policy = session.reviewPolicy ?? "required";
   const willReview = policy !== "none";
-  const reviewerCaps = reviewerAgent && willReview ? turnCapabilities(reviewerAgent, "reviewer") : { servers: [], permissions: [] };
+  /*
+   * The session's grant reaches the Reviewer too, not only the Builder.
+   *
+   * A Director that grants a session `run_commands` because its definition of
+   * done is `npm test` has decided this work needs commands run; the role that
+   * must verify it was the one role the grant never reached. The reviewer
+   * narrowing still applies on top, so a grant of write_files, payments or
+   * credentials gets no further than it ever did — at most this adds the three
+   * a Reviewer may hold.
+   */
+  const reviewerCaps = reviewerAgent && willReview ? turnCapabilities(reviewerAgent, "reviewer", session.grants?.tools ?? []) : { servers: [], permissions: [] };
   patchSession(projectId, key, { capabilities: { builder: builderCaps.permissions, reviewer: reviewerCaps.permissions } });
   /*
    * Where this is said matters as much as what it says.
