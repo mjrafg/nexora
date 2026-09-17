@@ -49,21 +49,54 @@ const login = await fetch(`${BASE}/api/auth/login`, { method: "POST", headers: {
 cookie = (login.headers.get("set-cookie") || "").split(";")[0];
 const conns = (await api("/api/providers")).connections;
 
-// the cheap models the test policy names, in order; never silently upgraded
+/*
+ * Models.
+ *
+ * By default the two cheap models the test policy names, in order, never
+ * silently upgraded. RP_DIRECTOR_MODEL / RP_BUILDER_MODEL / RP_REVIEWER_MODEL
+ * pin a model per role instead — for isolating whether behaviour comes from
+ * the architecture or from the model running it. A pinned model that is not
+ * available stops the run rather than falling back to something else.
+ */
 const CHOICES = [
   { runtimeType: "claude-code", providerConnectionId: "conn-anthropic", model: "claude-haiku-4-5" },
   { runtimeType: "codex", providerConnectionId: "conn-openai", model: "gpt-5.6-luna" },
 ];
-let runtime = null;
-for (const o of CHOICES.filter((o) => conns.some((c) => c.id === o.providerConnectionId))) {
+const PINNED = {
+  director: process.env.RP_DIRECTOR_MODEL,
+  builder: process.env.RP_BUILDER_MODEL,
+  reviewer: process.env.RP_REVIEWER_MODEL,
+};
+
+async function probe(o, label) {
   const { agent } = await api("/api/agents", { name: `RP probe ${Date.now().toString(36).slice(-5)}`, role: "Analyst", dept: "operations", toolPermissions: [], instructions: "Answer briefly.", runtime: o });
   const t = await api(`/api/agents/${agent.id}/test`, { message: "Reply with the single word ready." }).catch((e) => ({ ok: false, message: String(e.message) }));
   await api(`/api/agents/${agent.id}`, null, "DELETE").catch(() => {});
-  console.log(`  ${o.runtimeType}/${o.model}: ${t.ok ? "available" : `unavailable — ${String(t.message).slice(0, 90)}`}`);
-  if (t.ok) { runtime = o; break; }
+  console.log(`  ${label}: ${o.model} — ${t.ok ? "available" : `unavailable: ${String(t.message).slice(0, 90)}`}`);
+  return t.ok;
 }
-assert(runtime, "neither cheap model named by the test policy is available — not switching to a costlier one");
-console.log(`\n=== review-policy acceptance · ${runtime.runtimeType}/${runtime.model}\n`);
+
+let runtimes = null;
+if (PINNED.director || PINNED.builder || PINNED.reviewer) {
+  const need = ["director", "builder", "reviewer"];
+  assert(need.every((r) => PINNED[r]), `pin all three roles or none — got ${JSON.stringify(PINNED)}`);
+  runtimes = {};
+  for (const role of need) {
+    const o = { runtimeType: "claude-code", providerConnectionId: "conn-anthropic", model: PINNED[role] };
+    assert(await probe(o, role), `${role} model ${PINNED[role]} is not available — stopping rather than substituting another model`);
+    runtimes[role] = o;
+  }
+} else {
+  let pick = null;
+  for (const o of CHOICES.filter((o) => conns.some((c) => c.id === o.providerConnectionId))) {
+    if (await probe(o, "default")) { pick = o; break; }
+  }
+  assert(pick, "neither cheap model named by the test policy is available — not switching to a costlier one");
+  runtimes = { director: pick, builder: pick, reviewer: pick };
+}
+const runtime = runtimes.builder;
+
+console.log(`\n=== review-policy acceptance · director ${runtimes.director.model} · builder ${runtimes.builder.model} · reviewer ${runtimes.reviewer.model}\n`);
 
 const tag = Date.now().toString(36).slice(-5);
 const root = fs.mkdtempSync(path.join(os.tmpdir(), `nexora-rp-${tag}-`));
@@ -74,18 +107,19 @@ git("init", "-q", "-b", "main"); git("config", "user.email", "rp@nexora.local");
 git("add", "-A"); git("commit", "-qm", "start");
 
 const made = [];
-const mk = async (name, role, perms) => {
-  const { agent } = await api("/api/agents", { name, role, dept: "engineering", toolPermissions: perms, instructions: "Do the work you are given, and report honestly what you checked.", runtime });
+const mk = async (name, role, perms, rt = runtime) => {
+  const { agent } = await api("/api/agents", { name, role, dept: "engineering", toolPermissions: perms, instructions: "Do the work you are given, and report honestly what you checked.", runtime: rt });
   made.push(agent.id); return agent;
 };
 
 let projectId = null;
 const evidence = {};
 try {
-  const dir = await mk(`RP Director ${tag}`, "Project Director", ["read_files"]);
-  const bld = await mk(`RP Builder ${tag}`, "Engineer", ["read_files", "write_files", "run_commands", "browser"]);
-  const rev = await mk(`RP Reviewer ${tag}`, "Reviewer", ["read_files", "browser"]);
-  evidence.agents = { director: dir.name, builder: bld.name, reviewer: rev.name, runtime };
+  const dir = await mk(`RP Director ${tag}`, "Project Director", ["read_files"], runtimes.director);
+  const bld = await mk(`RP Builder ${tag}`, "Engineer", ["read_files", "write_files", "run_commands", "browser"], runtimes.builder);
+  const rev = await mk(`RP Reviewer ${tag}`, "Reviewer", ["read_files", "browser"], runtimes.reviewer);
+  evidence.models = { director: runtimes.director.model, builder: runtimes.builder.model, reviewer: runtimes.reviewer.model };
+  evidence.agents = { director: dir.name, builder: bld.name, reviewer: rev.name };
 
   const { project } = await api("/api/projects", {
     title: `Unit Converter ${tag}`,
@@ -347,7 +381,7 @@ try {
   const tok = sessions.reduce((a, s) => ({ i: a.i + (s.tokens?.input ?? 0), o: a.o + (s.tokens?.output ?? 0), t: a.t + (s.tokens?.turns ?? 0) }), { i: 0, o: 0, t: 0 });
   const msgs = db.projectMessages.filter((m) => m.projectId === projectId && m.usage);
   evidence.cost = {
-    runtime: `${runtime.runtimeType}/${runtime.model}`,
+    models: evidence.models,
     sessionTurns: tok.t, sessionInput: tok.i, sessionOutput: tok.o,
     directorTurns: msgs.length,
     directorInput: msgs.reduce((n, m) => n + (m.usage.inputTokens ?? 0), 0),
