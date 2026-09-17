@@ -326,6 +326,14 @@ function SessionRow({ s, project, names, onStopped }: { s: SessionRecord; projec
           )}
           {s.errorText && <div className="text-[#ff8ea3]">{s.errorText}</div>}
           <Facts s={s} project={project} names={names} />
+          {s.steps && s.steps.length > 0 && (
+            <details>
+              <summary className="cursor-pointer text-ink-3">
+                What the agents did — {s.steps.length} step{s.steps.length === 1 ? "" : "s"}
+              </summary>
+              <div className="mt-1.5 max-h-[420px] overflow-y-auto"><ActivityFeed events={s.steps} grouped /></div>
+            </details>
+          )}
           <details><summary className="cursor-pointer text-ink-3">Builder prompt</summary><pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap text-[10.5px] text-ink-2">{s.prompt}</pre></details>
         </div>
       )}

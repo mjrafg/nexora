@@ -111,6 +111,15 @@ export type SessionRecord = {
   resultSummary: string | null;
   /** what this session's turns actually cost, when the runtime reports it */
   tokens?: { input: number; output: number; turns: number };
+  /**
+   * What the agents actually did, kept with the session.
+   *
+   * The live bus is an in-memory ring: close the process and every command,
+   * file change and tool call a build made is gone. A chat keeps its steps on
+   * the assistant message; a session had nowhere to keep them, so finished work
+   * could only ever be inspected through its summary.
+   */
+  steps?: import("@/lib/activity").ActivityEvent[];
   stopReason: "user_stop" | "project_pause" | "restart" | null;
   errorText: string | null;
   startedAt: string | null;

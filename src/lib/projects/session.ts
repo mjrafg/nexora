@@ -6,7 +6,7 @@
    one final repair) → checkpoint commit → classify → notify the Director.
    ------------------------------------------------------------------ */
 
-import { asActor, turnEmitter } from "@/lib/activity";
+import { asActor, recentActivity, turnEmitter, type ActivityEvent } from "@/lib/activity";
 import { readDb } from "@/lib/store/db";
 import { agentRuntimeType, buildSystemPrompt, runAgentTurn } from "@/lib/runtime";
 import { TurnStopped } from "@/lib/runtime/types";
@@ -93,6 +93,38 @@ function withSkills(text: string, lead: string | null): string {
   return lead ? `${lead}\n\n${text}` : text;
 }
 
+/*
+ * Keep a session's steps small enough to live in the store beside it.
+ *
+ * The whole database is one JSON document rewritten on every change, so a
+ * chatty build must not be allowed to bloat it. Two limits: a cap per step so
+ * one enormous command output cannot dominate, and a budget for the session as
+ * a whole, spent newest-first so what survives is the end of the run — the part
+ * anyone reading it afterwards actually wants.
+ */
+const MAX_STEPS = 300;
+const STEP_TEXT = 2_000;
+const STEP_BUDGET = 400_000;
+
+function keepSteps(events: ActivityEvent[]): ActivityEvent[] {
+  const trimmed = (events.length > MAX_STEPS ? events.slice(-MAX_STEPS) : events).map((e) => ({
+    ...e,
+    detail: e.detail?.slice(0, STEP_TEXT),
+    output: e.output?.slice(0, STEP_TEXT),
+    // a screenshot is served from disk; the rest of the browser record is small
+    browser: e.browser ? { ...e.browser, console: e.browser.console?.slice(0, 20) } : undefined,
+  }));
+  const kept: ActivityEvent[] = [];
+  let spent = 0;
+  for (let i = trimmed.length - 1; i >= 0; i--) {
+    const size = JSON.stringify(trimmed[i]).length;
+    if (spent + size > STEP_BUDGET) break;
+    spent += size;
+    kept.unshift(trimmed[i]);
+  }
+  return kept;
+}
+
 /** Add one turn's reported usage to the session's running total. */
 function countTokens(projectId: string, key: string, usage: { inputTokens?: number; outputTokens?: number } | undefined): void {
   if (!usage) return;
@@ -170,6 +202,7 @@ async function runAndMonitor(projectId: string, key: string, builderId: string, 
   const session = getSession(projectId, key)!;
   const project = getProject(projectId)!;
   const emit = turnEmitter(projectChannel(projectId), `session:${key}`);
+  const runStarted = Date.now();
   let outcome: SessionOutcome;
   try {
     outcome = await buildAndReview({ project, session, builderId, cwd, timeoutMs, continuation, emit });
@@ -178,6 +211,15 @@ async function runAndMonitor(projectId: string, key: string, builderId: string, 
   } finally {
     running.delete(session.id);
   }
+
+  // everything this session did, kept with the session rather than left in RAM
+  const before = getSession(projectId, key)?.steps ?? [];
+  // an agent's own steps carry an actor; the engine's markers for this session
+  // ("review round 1 started", the final result) are Nexora's own voice and
+  // carry only the turn id. Both belong in the session's record.
+  const mine = recentActivity(projectChannel(projectId), runStarted)
+    .filter((e) => e.actor?.sessionKey === key || (!e.actor && e.turnId === `session:${key}`));
+  const steps = keepSteps([...before, ...mine]);
 
   const fresh = getProject(projectId);
   const pausing = fresh && ["PAUSING", "PAUSED"].includes(fresh.state);
@@ -189,6 +231,7 @@ async function runAndMonitor(projectId: string, key: string, builderId: string, 
     endedAt: new Date().toISOString(),
     resultSummary: outcome.summary.slice(0, 1_000) || null,
     errorText: outcome.errorText ?? null,
+    ...(steps.length ? { steps } : {}),
   });
   stoppedByOwner.delete(session.id);
   addActivity(
