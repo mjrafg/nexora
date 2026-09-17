@@ -2,9 +2,8 @@
 
 import { randomUUID } from "node:crypto";
 import { PROVIDERS } from "../catalog";
-import { getSecret } from "@/lib/store/db";
+import { claudeAccessToken } from "../logins";
 
-const CLAUDE_TOKEN_SECRET_ID = "claude-code-oauth-token";
 import type { AgentRuntime, ResolvedRuntime, RuntimeChatRequest, RuntimeChatResult } from "../types";
 import { RuntimeError, TurnBudgetExhausted } from "../types";
 import { agentWorkspace, childEnv, findBinary, renderTranscript, runCli, tail, type Env } from "./cli";
@@ -30,14 +29,19 @@ function locate(): string {
   return bin;
 }
 
-function envFor(resolved: ResolvedRuntime): Env {
+/**
+ * `needMs` is how long this process expects to be using the token. A turn that
+ * runs for forty minutes needs a credential that is still alive at the end of
+ * it, not one that was merely alive when it started.
+ */
+async function envFor(resolved: ResolvedRuntime, needMs = 0): Promise<Env> {
   const extra: Env = {};
   // Claude Code refuses --permission-mode bypassPermissions as root unless it is told it runs in a sandbox
   if (typeof process.getuid === "function" && process.getuid() === 0) extra.IS_SANDBOX = "1";
   if (resolved.secret) extra.ANTHROPIC_API_KEY = resolved.secret;
   else {
-    // Long-lived token captured by the web login flow (Settings → AI Providers → Runtime logins).
-    const token = getSecret(CLAUDE_TOKEN_SECRET_ID);
+    // The web login flow's credential, renewed here if it would not outlast the turn.
+    const token = await claudeAccessToken(needMs);
     if (token) extra.CLAUDE_CODE_OAUTH_TOKEN = token;
   }
   const base = resolved.connection.baseUrl;
@@ -208,7 +212,8 @@ async function invoke(
       finalObj = ev as ClaudeJson;
     }
   };
-  const res = await runCli(bin, args, { cwd: req.cwd, env: envFor(req.resolved), timeoutMs: req.timeoutMs ?? 600_000, onLine, onSpawn: req.onSpawn });
+  const timeoutMs = req.timeoutMs ?? 600_000;
+  const res = await runCli(bin, args, { cwd: req.cwd, env: await envFor(req.resolved, timeoutMs), timeoutMs, onLine, onSpawn: req.onSpawn });
   if (res.timedOut) throw new RuntimeError("Claude Code timed out", tail(res.stderr));
   const out = finalObj ?? parseOutput(res.stdout);
   if (res.code !== 0 && !out) {
@@ -282,7 +287,7 @@ export const claudeCodeRuntime: AgentRuntime = {
       const e = err as RuntimeError;
       return { ok: false, message: e.message, detail: e.detail, durationMs: Date.now() - started };
     }
-    const version = await runCli(bin, ["--version"], { env: envFor(resolved), timeoutMs: 20_000 });
+    const version = await runCli(bin, ["--version"], { env: await envFor(resolved), timeoutMs: 20_000 });
     if (version.code !== 0) {
       return { ok: false, message: "Claude Code CLI failed to start", detail: tail(version.stderr), durationMs: Date.now() - started };
     }
@@ -329,7 +334,8 @@ export async function claudeSlash(
     return { ok: false, text: "", error: (err as RuntimeError).message };
   }
   const args = ["-p", "--output-format", "json", "--model", resolved.config.model, "--resume", opts.sessionId, opts.command];
-  const res = await runCli(bin, args, { cwd: opts.cwd, env: envFor(resolved), timeoutMs: opts.timeoutMs ?? 600_000 });
+  const slashTimeout = opts.timeoutMs ?? 600_000;
+  const res = await runCli(bin, args, { cwd: opts.cwd, env: await envFor(resolved, slashTimeout), timeoutMs: slashTimeout });
   if (res.timedOut) return { ok: false, text: "", error: `Claude Code timed out running ${opts.command}.` };
   const out = parseOutput(res.stdout);
   if (!out) return { ok: false, text: "", error: `Claude Code returned no parseable output for ${opts.command}. ${tail(res.stderr, 300)}` };

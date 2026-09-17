@@ -3,9 +3,17 @@
 
    Claude Code: native OAuth (PKCE). We build the same authorize URL the
                 `claude` CLI uses, the owner signs in and pastes the returned
-                code, and we exchange it for a long-lived token at
-                api.anthropic.com. The token is stored as a secret and injected
-                as CLAUDE_CODE_OAUTH_TOKEN when the runtime spawns `claude`.
+                code, and we exchange it at api.anthropic.com. The WHOLE
+                credential is kept — access token, refresh token and expiry —
+                and the access half is injected as CLAUDE_CODE_OAUTH_TOKEN when
+                the runtime spawns `claude`.
+
+                It used to keep only the access token. That works for a few
+                hours and then every Director, Builder and Reviewer turn fails
+                with "401 OAuth access token has expired", with no native CLI
+                login to fall back on, and the only cure was the owner signing
+                in again. The renewable half of the credential was being parsed
+                and thrown away.
    Codex:       `codex login --device-auth` under a pseudo-terminal → prints a
                 URL + one-time code; the owner enters it in the browser and the
                 CLI persists ~/.codex/auth.json.
@@ -16,9 +24,17 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { deleteSecret, getSecret, putSecret } from "@/lib/store/db";
 import { augmentedPath, childEnv, findBinary, runCli, tail } from "./adapters/cli";
 import { CODEX_CANDIDATES } from "./adapters/codex";
+import { mergeRefreshed, needsRefresh, parseCredential, singleFlight, type ClaudeCredential, type TokenResponse } from "./claude-credential";
+
+export type { ClaudeCredential };
 
 export type LoginRuntime = "claude-code" | "codex";
+/** Pre-refresh format: a bare access token and nothing to renew it with. */
 export const CLAUDE_TOKEN_SECRET_ID = "claude-code-oauth-token";
+/** Current format: the whole credential, as JSON. */
+export const CLAUDE_CRED_SECRET_ID = "claude-code-oauth";
+
+
 
 /* ---- Claude Code OAuth constants (same public client the CLI uses) ---- */
 const CLAUDE_OAUTH = {
@@ -48,6 +64,85 @@ type Internal = LoginSession & {
   verifier?: string;
   state?: string;
 };
+
+/* ---------- the stored credential ---------- */
+
+export function readClaudeCredential(): ClaudeCredential | null {
+  const cred = parseCredential(getSecret(CLAUDE_CRED_SECRET_ID), getSecret(CLAUDE_TOKEN_SECRET_ID));
+  // migrate the old shape in place, so an upgrade never logs the owner out
+  if (cred && getSecret(CLAUDE_TOKEN_SECRET_ID)) writeClaudeCredential(cred);
+  return cred;
+}
+
+export function writeClaudeCredential(cred: ClaudeCredential | null): void {
+  if (!cred) {
+    deleteSecret(CLAUDE_CRED_SECRET_ID);
+    deleteSecret(CLAUDE_TOKEN_SECRET_ID);
+    return;
+  }
+  putSecret(JSON.stringify(cred), CLAUDE_CRED_SECRET_ID);
+  // the new copy is on disk before the old one goes: one credential at rest, not two
+  if (getSecret(CLAUDE_TOKEN_SECRET_ID)) deleteSecret(CLAUDE_TOKEN_SECRET_ID);
+}
+
+/* ---------- refresh ---------- */
+
+/** Why the last refresh failed, for the owner-facing status line. Never a token. */
+let lastRefreshError: string | null = null;
+/**
+ * One refresh at a time.
+ *
+ * The Director, a Builder and a Reviewer can all want a token in the same
+ * instant. Refresh tokens rotate, so three simultaneous refreshes would race
+ * and two of them would persist a refresh token the provider has already
+ * replaced. The app is a single process, so one shared promise is the whole
+ * lock that is needed.
+ */
+const refreshOnce = singleFlight<ClaudeCredential | null>();
+
+async function refreshClaude(cred: ClaudeCredential): Promise<ClaudeCredential | null> {
+  if (!cred.refresh) return cred;
+  try {
+    const res = await fetch(CLAUDE_OAUTH.tokenUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ grant_type: "refresh_token", refresh_token: cred.refresh, client_id: CLAUDE_OAUTH.clientId }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const raw = await res.text();
+    let json: TokenResponse & { error?: string; error_description?: string } = {};
+    try {
+      json = JSON.parse(raw);
+    } catch {
+      /* non-JSON */
+    }
+    const next = res.ok ? mergeRefreshed(cred, json, Date.now()) : null;
+    if (!next || next === cred) {
+      lastRefreshError = json.error_description || json.error || `HTTP ${res.status}`;
+      return cred;
+    }
+    writeClaudeCredential(next);
+    lastRefreshError = null;
+    return next;
+  } catch (err) {
+    // a network blip must not throw away a credential that still works
+    lastRefreshError = String(err instanceof Error ? err.message : err).slice(0, 200);
+    return cred;
+  }
+}
+
+/**
+ * A usable access token, renewed if it would not survive the work it is for.
+ *
+ * `needMs` is how long the caller expects to be using it — a turn's timeout.
+ */
+export async function claudeAccessToken(needMs = 0): Promise<string | null> {
+  const cred = readClaudeCredential();
+  if (!cred) return null;
+  if (!needsRefresh(cred, needMs, Date.now())) return cred.access;
+  const fresh = await refreshOnce(() => refreshClaude(cred));
+  return fresh?.access ?? cred.access;
+}
 
 const sessions = new Map<string, Internal>();
 const SESSION_TTL_MS = 20 * 60 * 1000;
@@ -184,7 +279,7 @@ async function exchangeClaudeCode(s: Internal, pasted: string) {
       signal: AbortSignal.timeout(30_000),
     });
     const raw = await res.text();
-    let json: { access_token?: string; refresh_token?: string; error?: string; error_description?: string } = {};
+    let json: { access_token?: string; refresh_token?: string; expires_in?: number; error?: string; error_description?: string } = {};
     try {
       json = JSON.parse(raw);
     } catch {
@@ -196,8 +291,19 @@ async function exchangeClaudeCode(s: Internal, pasted: string) {
       touch(s, { status: "awaiting-code", message: `That code was rejected (${detail}). Codes expire fast — reload the link, sign in, and paste the new code.` });
       return;
     }
-    putSecret(json.access_token, CLAUDE_TOKEN_SECRET_ID);
-    touch(s, { status: "completed", message: "Signed in. Claude Code will use this token from now on." });
+    writeClaudeCredential({
+      access: json.access_token,
+      refresh: json.refresh_token,
+      expiresAt: json.expires_in ? Date.now() + json.expires_in * 1000 : undefined,
+      obtainedAt: Date.now(),
+    });
+    lastRefreshError = null;
+    touch(s, {
+      status: "completed",
+      message: json.refresh_token
+        ? "Signed in. Nexora will keep this login renewed on its own."
+        : "Signed in — but the provider returned no refresh token, so this login will need repeating when it expires.",
+    });
   } catch (err) {
     touch(s, { status: "awaiting-code", message: `Token exchange failed: ${String(err)}. Try pasting a fresh code.` });
   }
@@ -259,25 +365,59 @@ export function submitCode(id: string, code: string): LoginSession {
 
 /* ---------- status / logout ---------- */
 
-export type RuntimeLoginStatus = { loggedIn: boolean; detail?: string; method?: string; installed: boolean };
+export type RuntimeLoginStatus = { loggedIn: boolean; detail?: string; method?: string; installed: boolean; /** epoch ms, when known */ expiresAt?: number };
 
 export async function claudeStatus(): Promise<RuntimeLoginStatus> {
   const bin = claudeBin();
   if (!bin) return { loggedIn: false, installed: false, detail: "Claude Code CLI not found" };
-  const token = getSecret(CLAUDE_TOKEN_SECRET_ID);
+  const cred = readClaudeCredential();
+  // ask for a token the way a turn would, so status reflects a renewed login
+  const token = await claudeAccessToken();
   const env = childEnv(token ? { CLAUDE_CODE_OAUTH_TOKEN: token } : {});
   const r = await runCli(bin, ["auth", "status", "--json"], { env, timeoutMs: 20_000 });
+  const fresh = token ? readClaudeCredential() : cred;
+  const life = () => {
+    if (!fresh) return "";
+    if (!fresh.refresh) return " · will need signing in again when it expires (no refresh token)";
+    if (!fresh.expiresAt) return " · renewed automatically";
+    const mins = Math.round((fresh.expiresAt - Date.now()) / 60_000);
+    return ` · renews automatically, this token valid ${mins > 0 ? `${mins} min` : "now expired"}`;
+  };
+  /*
+   * `claude auth status` reports that a credential is configured, not that it
+   * works — it answers loggedIn:true for a token the provider would reject.
+   * The expiry we now keep is the one thing here that can actually contradict
+   * it, so a credential that is past its expiry and has nothing to renew it
+   * with is reported for what it is.
+   */
+  const dead = !!fresh?.expiresAt && fresh.expiresAt <= Date.now();
   try {
     const j = JSON.parse(r.stdout.trim()) as { loggedIn?: boolean; email?: string; authMethod?: string; subscriptionType?: string };
     const who = [j.email, j.subscriptionType].filter(Boolean).join(" · ");
+    if (dead) return { loggedIn: false, installed: true, method: "web token", expiresAt: fresh?.expiresAt, detail: `This login expired and could not be renewed${lastRefreshError ? ` (${lastRefreshError})` : ""} — sign in again.` };
     return {
       loggedIn: !!j.loggedIn,
       installed: true,
       method: token ? "web token" : j.authMethod,
-      detail: j.loggedIn ? who || (token ? "Signed in with a web token" : "Logged in") : "Not logged in",
+      expiresAt: fresh?.expiresAt,
+      detail: j.loggedIn
+        ? `${who || (token ? "Signed in with a web token" : "Logged in")}${life()}${lastRefreshError ? ` · last renewal failed: ${lastRefreshError}` : ""}`
+        : "Not logged in",
     };
   } catch {
-    return { loggedIn: !!token, installed: true, detail: token ? "Web token stored" : tail(r.stderr || r.stdout, 200) || "Not logged in" };
+    /*
+     * Holding a token is not the same as being signed in.
+     *
+     * This used to answer `loggedIn: !!token`, so an expired credential still
+     * showed a green dot and "Signed in" while every agent turn was failing
+     * with a 401. If the status cannot be read, say so.
+     */
+    return {
+      loggedIn: false,
+      installed: true,
+      expiresAt: fresh?.expiresAt,
+      detail: tail(r.stderr || r.stdout, 200) || (token ? "A credential is stored, but its status could not be read" : "Not logged in"),
+    };
   }
 }
 
@@ -292,7 +432,8 @@ export async function codexStatus(): Promise<RuntimeLoginStatus> {
 
 export async function logout(runtime: LoginRuntime): Promise<void> {
   if (runtime === "claude-code") {
-    deleteSecret(CLAUDE_TOKEN_SECRET_ID);
+    writeClaudeCredential(null);
+    lastRefreshError = null;
     const bin = claudeBin();
     if (bin) await runCli(bin, ["auth", "logout"], { env: childEnv(), timeoutMs: 20_000 });
   } else {
