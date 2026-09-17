@@ -144,7 +144,7 @@ export type RuntimeChatRequest = {
   /** Project sessions: run in this directory instead of the agent workspace. */
   cwdOverride?: string;
   /** Project sessions: explicit built-in tool set ("builder" = full edit/exec; "reader" = read-only). */
-  toolProfile?: "builder" | "reader";
+  toolProfile?: "builder" | "reader" | "verifier";
   /** Extra stdio MCP servers to expose (e.g. the Director's orchestration tools). */
   extraServers?: ExtraMcpServer[];
   /** Steps this turn may take before it must ask the owner to continue. */

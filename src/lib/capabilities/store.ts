@@ -29,6 +29,16 @@ export function findRequest(ref: string): CapabilityRequest | null {
   return hits.length === 1 ? hits[0] : null;
 }
 
+/**
+ * Requests raised by one execution scope — a specific session, role and round.
+ *
+ * This is how the engine knows a review stopped because it lacked a tool,
+ * rather than inferring it from the words the model happened to use.
+ */
+export function requestsForScope(executionScopeId: string): CapabilityRequest[] {
+  return listRequests().filter((r) => r.executionScopeId === executionScopeId);
+}
+
 export function openRequests(): CapabilityRequest[] {
   return listRequests().filter((r) => OPEN_REQUEST_STATES.includes(r.status)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }

@@ -190,6 +190,14 @@ export async function checkpointOnlyFiles(dir: string, branch: string): Promise<
 
 export type WorktreeSnapshot = { porcelain: string; head: string };
 
+/** Which commit a review is judging — the snapshot identity in its evidence. */
+export async function headOf(dir: string): Promise<string | undefined> {
+  const r = await git(dir, ["rev-parse", "--short", "HEAD"]);
+  if (!r.ok || !r.stdout) return undefined;
+  const dirty = await git(dir, ["status", "--porcelain"]);
+  return `commit ${r.stdout}${dirty.stdout.trim() ? " plus uncommitted working-tree changes" : ""}`;
+}
+
 export async function snapshot(dir: string): Promise<WorktreeSnapshot> {
   const [p, h] = await Promise.all([git(dir, ["status", "--porcelain"]), git(dir, ["rev-parse", "HEAD"])]);
   return { porcelain: p.stdout, head: h.stdout };

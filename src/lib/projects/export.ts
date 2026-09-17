@@ -36,6 +36,7 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(
 const REVIEW_OUTCOME: Record<NonNullable<SessionRecord["reviewStatus"]>, string> = {
   passed: "passed independent review",
   findings: "reviewer returned findings",
+  blocked: "BLOCKED — the reviewer lacked a capability the work required and could not complete the review",
   incomplete: "INCOMPLETE — the reviewer could not finish; this result was never reviewed",
   skipped: "skipped — the Director chose no reviewer for this session",
   not_applicable: "not applicable — nothing to review",

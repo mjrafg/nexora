@@ -475,7 +475,7 @@ export type AgentTurnInput = {
   /** runtime-native session id to resume (Builder repairs, Director continuity) */
   sessionId?: string;
   cwdOverride?: string;
-  toolProfile?: "builder" | "reader";
+  toolProfile?: "builder" | "reader" | "verifier";
   /** stdio MCP servers for CLI runtimes (e.g. the Director's tools) */
   extraServers?: ExtraMcpServer[];
   /** in-app tools for the API runtime (same tools as extraServers, executed in-process) */

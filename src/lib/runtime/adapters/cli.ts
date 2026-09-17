@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { scrubAgentEnv } from "../child-env";
 import type { HistoryTurn } from "../types";
 
 export type Env = Record<string, string | undefined>;
@@ -92,7 +93,7 @@ export function childEnv(extra: Env = {}): Env {
   const env: Env = { ...process.env, ...extra };
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE_ENTRYPOINT;
-  return env;
+  return scrubAgentEnv(env);
 }
 
 export function agentWorkspace(agentId: string, override?: string): string {

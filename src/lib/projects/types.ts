@@ -43,8 +43,12 @@ export type ReviewPolicy = "required" | "spot_check" | "none";
  * A Reviewer that ran out of steps, a Director that chose no review, and a
  * session with nothing to review are three different facts, and every one of
  * them used to be stored as a null verdict.
+ *
+ * `blocked` is a fourth: the Reviewer could not do the job because it lacked a
+ * tool the work required, and said so. That is not a defect in the code, and
+ * turning it into one sent a Builder to repair a review's missing shell.
  */
-export type ReviewStatus = "passed" | "findings" | "incomplete" | "skipped" | "not_applicable";
+export type ReviewStatus = "passed" | "findings" | "blocked" | "incomplete" | "skipped" | "not_applicable";
 
 /**
  * What kind of work a session is, which decides who verifies what.
@@ -243,4 +247,4 @@ export type ProjectView = ProjectRecord & {
 /* ---- director tool inputs ---- */
 
 export type MilestoneInput = { key: string; name: string; goal: string; acceptance: string; dependsOn: string[] };
-export type SessionInput = { key: string; name: string; purpose: string; prompt: string; dependsOn: string[]; isolated: boolean; agentId?: string | null; skills?: string[]; reviewerSkills?: string[]; grantTools?: string[]; grantServers?: string[]; kind?: SessionKind; reviewPolicy?: ReviewPolicy; reviewWhy?: string };
+export type SessionInput = { key: string; name: string; purpose: string; prompt: string; dependsOn: string[]; isolated: boolean; agentId?: string | null; skills?: string[]; reviewerSkills?: string[]; grantTools?: string[]; grantServers?: string[]; kind?: SessionKind; reviewPolicy?: ReviewPolicy; reviewWhy?: string; /** "engine" when the engine forced the policy rather than the Director choosing it */ policyBy?: string };

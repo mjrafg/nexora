@@ -255,7 +255,7 @@ export function planSessions(projectId: string, milestoneKey: string, sessions: 
         if (old.status !== "planned" && old.status !== "abandoned") {
           throw new Error(`Session ${s.key} is ${old.status} and its definition can no longer be replaced — use recover_session instead.`);
         }
-        Object.assign(old, { name: s.name, purpose: s.purpose, prompt: s.prompt, dependsOn: s.dependsOn, status: "planned", agentId: s.agentId ?? null, originalRequest: s.prompt, skills: selection(s.skills), reviewerSkills: selection(s.reviewerSkills), grants: resolveGrant(project, s.grantTools, s.grantServers).grant, kind: s.kind ?? "build", reviewPolicy: s.reviewPolicy ?? "required", reviewPolicyBy: director, reviewPolicyWhy: s.reviewWhy ?? null, reviewStatus: null });
+        Object.assign(old, { name: s.name, purpose: s.purpose, prompt: s.prompt, dependsOn: s.dependsOn, status: "planned", agentId: s.agentId ?? null, originalRequest: s.prompt, skills: selection(s.skills), reviewerSkills: selection(s.reviewerSkills), grants: resolveGrant(project, s.grantTools, s.grantServers).grant, kind: s.kind ?? "build", reviewPolicy: s.reviewPolicy ?? "required", reviewPolicyBy: s.policyBy ?? director, reviewPolicyWhy: s.reviewWhy ?? null, reviewStatus: null });
       } else {
         const rec: SessionRecord = {
           id: newId(),
@@ -275,7 +275,7 @@ export function planSessions(projectId: string, milestoneKey: string, sessions: 
           // the rest of the project's life: "why was there no Reviewer here?"
           // has to be answerable from the record, not from memory
           reviewPolicy: s.reviewPolicy ?? "required",
-          reviewPolicyBy: director,
+          reviewPolicyBy: s.policyBy ?? director,
           reviewPolicyWhy: s.reviewWhy ?? null,
           reviewStatus: null,
           grants: resolveGrant(project, s.grantTools, s.grantServers).grant,

@@ -606,3 +606,46 @@ registerPrompt({
   placeholders: ["scope"],
   defaultContent: "(Verification split unchanged: {{scope}})",
 });
+
+registerPrompt({
+  id: "project-reviewer-evidence-section",
+  name: "Reviewer — what the worker did and what the engine watched it do",
+  description: "The evidence block handed to a Reviewer: the worker's own written report, and separately the commands Nexora actually observed it run.",
+  category: "engineering",
+  version: 1,
+  required: true,
+  usedBy: ["Project Reviewer"],
+  placeholders: ["snapshot", "report", "executions"],
+  defaultContent: [
+  "# What you are reviewing",
+  "{{snapshot}}",
+  "",
+  "## The worker's own report — its claims, not established fact",
+  "This is what the session said about its work. Treat it as a claim to check, not as evidence. Where it asserts something you can verify, verify it.",
+  "{{report}}",
+  "",
+  "## Commands Nexora observed this session run — recorded by the engine, not written by the worker",
+  "These are execution records, not prose: the engine captured them as the session ran. A command listed here with a zero exit really did exit zero. A claim in the report above with no matching record here has not been observed by anyone but its author.",
+  "{{executions}}",
+].join("\n"),
+});
+
+registerPrompt({
+  id: "project-reviewer-preview-note",
+  name: "Reviewer — getting the running app in front of you",
+  description: "Tells a Reviewer that can run commands how to serve the snapshot it is reviewing, and what not to do to a port it does not own.",
+  category: "engineering",
+  version: 1,
+  required: true,
+  usedBy: ["Project Reviewer"],
+  defaultContent: [
+  "# Looking at the running app",
+  "You can run commands, so if this work is a served application you can start the project's own preview for the snapshot you are reviewing — its documented dev or preview script, on a port you choose that is currently free.",
+  "Reviewers before you could not, and worked around it by opening built files over `file://` and pasting the bundle in by hand. That tests something adjacent to the product, not the product: report a check done that way as UNVERIFIED unless you have no alternative and say which.",
+  "Rules about ports and processes, because the machine is shared:",
+  "- Never kill, restart or take over a process you did not start. If your port is taken, pick another.",
+  "- An HTTP 200 does not mean it is your build. Confirm the page you get is the project you are reviewing before you judge it.",
+  "- Stop what you started when you are finished, and leave anything else alone.",
+  "- Keep server logs and scratch outside the repository. They are not deliverables.",
+].join("\n"),
+});

@@ -286,14 +286,14 @@ async function processAfterTurn(projectId: string): Promise<void> {
     if (round === MAX_PLAN_REVIEW_ROUNDS) {
       patchProject(projectId, { planReviewRound: 0 });
       addActivity(projectId, "review", "Plan revised twice — proceeding without a third review (review policy cap)");
-      acceptPlan(projectId);
+      acceptPlan(projectId, "cap");
       return;
     }
     const review = await reviewArtifact(projectId, render(getPrompt("project-plan-review-request"), { project_goal: p.goal, plan: planDocument(projectId) }), round);
     if (!review) {
       addActivity(projectId, "review", "Plan review could not run — plan proceeds unreviewed (reviewer unavailable)");
       patchProject(projectId, { planReviewRound: 0 });
-      acceptPlan(projectId);
+      acceptPlan(projectId, "unreviewed");
       return;
     }
     if (review.verdict === "pass") {
@@ -339,11 +339,37 @@ async function processAfterTurn(projectId: string): Promise<void> {
   }
 }
 
-function acceptPlan(projectId: string): void {
+/*
+ * `atCap` means the revision limit ran out, not that a Reviewer approved it.
+ *
+ * Both endings used to send the Director the same sentence — "The master plan
+ * passed the independent review" — including the run where the activity log
+ * said, correctly, "Plan revised twice — proceeding without a third review".
+ * The Director then told the owner the plan had passed a review that never
+ * finished.
+ */
+type PlanAccept = "passed" | "cap" | "unreviewed";
+const PLAN_ACCEPT: Record<PlanAccept, { note: string; state: string }> = {
+  passed: {
+    note: "The master plan passed the independent review.",
+    state: "Master plan accepted — project is running",
+  },
+  cap: {
+    note: "Your revised master plan is accepted because the revision limit was reached — it was NOT approved by a review. The last review returned findings and there was no further round. Say that accurately if you tell the owner anything about it.",
+    state: "Master plan accepted at the revision cap, not review-approved — project is running",
+  },
+  unreviewed: {
+    note: "Your master plan is accepted WITHOUT any independent review — the Reviewer could not run. Nobody has checked it. Say that accurately if you tell the owner anything about it.",
+    state: "Master plan accepted unreviewed (reviewer unavailable) — project is running",
+  },
+};
+
+function acceptPlan(projectId: string, how: PlanAccept = "passed"): void {
   const p = getProject(projectId)!;
+  const { note, state } = PLAN_ACCEPT[how];
   if (p.state === "PLANNING") {
-    setProjectState(projectId, "RUNNING", "Master plan accepted — project is running");
-    queueObservation(projectId, "The master plan passed the independent review. Tell the owner, then begin: inspect the repository, plan the first ready milestone into sessions, and start the ones you judge ready.");
+    setProjectState(projectId, "RUNNING", state);
+    queueObservation(projectId, `${note} Tell the owner, then begin: inspect the repository, plan the first ready milestone into sessions, and start the ones you judge ready.`);
   } else {
     addActivity(projectId, "plan", "Milestone plan revised");
     queueObservation(projectId, "Your revised milestone plan is accepted. Continue orchestration.");
@@ -599,7 +625,7 @@ export async function handleDirectorTool(projectId: string, name: string, args: 
           .map((x) => `- ${x.key} ${x.name} [${x.kind ?? "build"}] — review: ${x.reviewStatus ?? "unknown"}${x.reviewStatus === "skipped" ? " (no Reviewer ran; the Builder's own verification is all there is)" : ""}${x.reviewStatus === "incomplete" ? " (UNREVIEWED — its Reviewer could not finish; do not trust its claims without checking)" : ""}`)
           .join("\n") || "- (nothing recorded)";
         const reuse = render(getPrompt("project-integration-reuse-evidence"), { prior_evidence: evidence });
-        planSessions(projectId, msKey, [{ key: intKey, name: `${ms.name} integration`, purpose: `Integrate and validate milestone ${msKey}`, prompt: render(getPrompt("project-integration-wrapper"), { instructions: `${reuse}\n\n${instructions}`, integration_branch: integration, topology }), dependsOn: [], isolated: false, kind: "integration", reviewPolicy: "required", reviewWhy: "Integration is always independently reviewed." }]);
+        planSessions(projectId, msKey, [{ key: intKey, name: `${ms.name} integration`, purpose: `Integrate and validate milestone ${msKey}`, prompt: render(getPrompt("project-integration-wrapper"), { instructions: `${reuse}\n\n${instructions}`, integration_branch: integration, topology }), dependsOn: [], isolated: false, kind: "integration", reviewPolicy: "required", reviewWhy: "Engine policy: integration is always independently reviewed. The Director did not choose this.", policyBy: "engine" }]);
         patchMilestone(projectId, msKey, { status: "integrating" });
         await launchSession(projectId, intKey, { timeoutMin: args.timeout_minutes ? Number(args.timeout_minutes) : undefined, observe });
         addActivity(projectId, "integration", `${msKey} integration session started`);
