@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, use, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Download, ExternalLink, Pause, Play, Square, Trash2, Loader2, Send, Boxes, Activity as ActivityIcon, ChevronDown, ChevronRight, GitBranch, CheckCircle2, XCircle, Circle, CircleDot, AlertTriangle } from "lucide-react";
@@ -21,6 +21,9 @@ const STATE_COLOR: Record<string, string> = {
 const SESSION_COLOR: Record<string, string> = {
   planned: "#6f7890", running: "#4f8bff", completed: "#3dd68c", failed: "#ff5c7a", timeout: "#f5b942", needs_attention: "#f5b942", paused: "#6f7890", abandoned: "#6f7890",
 };
+
+/** The engine's own moves belong in the story; per-session bookkeeping does not. */
+const IN_CHAT = new Set(["plan", "review", "recovery", "delivery", "decision", "integration"]);
 
 export default function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -87,7 +90,9 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
     return () => clearInterval(t);
   }, [settled, load]);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ block: "end" }); }, [messages.length]);
+  // the transcript grows from both ends of the story — what the Director said,
+  // and what the engine did while it was quiet
+  useEffect(() => { bottomRef.current?.scrollIntoView({ block: "end" }); }, [messages.length, activity.length]);
 
   async function send() {
     const text = draft.trim();
@@ -110,12 +115,29 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
     router.push("/projects");
   }
 
+  /*
+   * The chat is the project's story, so it has to include the parts the
+   * Director did not say itself.
+   *
+   * Planning, plan review, recovery and delivery are the engine's own doing —
+   * they were recorded as activity and shown only on a separate tab, so a
+   * project sitting in plan review looked like nothing was happening at all.
+   * Session-level lines stay out: the Director reports those in its replies,
+   * and the plan panel lists them.
+   */
+  const timeline = useMemo(() => {
+    const rows: ({ at: number; kind: "message"; m: ProjectMessage } | { at: number; kind: "engine"; a: ProjectActivity })[] = [
+      ...messages.map((m) => ({ at: new Date(m.createdAt).getTime(), kind: "message" as const, m })),
+      ...activity.filter((a) => IN_CHAT.has(a.kind)).map((a) => ({ at: a.ts, kind: "engine" as const, a })),
+    ];
+    return rows.sort((x, y) => x.at - y.at);
+  }, [messages, activity]);
+
   if (error && !project) return <AppShell><div className="glass rounded-2xl p-4 text-[12.5px] text-[#ff8ea3]">{error}</div></AppShell>;
   if (!project) return <AppShell><div className="flex items-center gap-2 text-[12.5px] text-ink-3"><Loader2 className="h-4 w-4 animate-spin" /> Loading project…</div></AppShell>;
 
   const canPause = ["RUNNING", "RESUMING", "PLANNING"].includes(project.state);
   const canResume = ["PAUSED", "NEEDS_USER"].includes(project.state);
-  const directorWorking = live.some((e) => e.turnId.startsWith("director:") && e.status === "running");
 
   return (
     // an application frame: the page itself never scrolls, so the transcript
@@ -152,12 +174,14 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
         <Panel title="Project Chat" subtitle={`Director: ${project.directorAgentName} · Builder: ${project.builderAgentName} · Reviewer: ${project.reviewerAgentName}`} className="flex min-h-[420px] flex-col xl:min-h-0" bodyClassName="flex-1 !p-0 min-h-0">
           <div className="flex h-full min-h-0 flex-col">
             <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
-              {messages.map((m) => <ProjectBubble key={m.id} m={m} />)}
-              {directorWorking && (
-                <div className="inline-flex items-center gap-2 rounded-2xl rounded-tl-sm border border-line bg-white/[0.04] px-3 py-2 text-[12px] text-ink-3">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> {project.directorAgentName} is directing…
+              {timeline.map((row) => row.kind === "message"
+                ? <ProjectBubble key={row.m.id} m={row.m} />
+                : <EngineRow key={row.a.id} a={row.a} />)}
+              {project.busy.map((b) => (
+                <div key={b.name} className="inline-flex items-center gap-2 rounded-2xl rounded-tl-sm border border-line bg-white/[0.04] px-3 py-2 text-[12px] text-ink-3">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> {b.name} is {b.role === "Director" ? "directing" : b.role === "Reviewer" ? "reviewing" : "building"}…
                 </div>
-              )}
+              ))}
               <div ref={bottomRef} />
             </div>
             <form className="flex items-end gap-2 border-t border-line p-3" onSubmit={(e) => { e.preventDefault(); void send(); }}>
@@ -269,6 +293,26 @@ function ActivityNow({ project }: { project: ProjectView }) {
       {busy.length ? busy.map((b) => `${b.name} (${b.role})`).join(", ") : `${runningKeys.length} session${runningKeys.length === 1 ? "" : "s"}`}
       {runningKeys.length > 0 && <span className="font-mono text-ink-3">{runningKeys.join(", ")}</span>}
     </span>
+  );
+}
+
+/** Something the engine did, in the run's own story rather than on a tab. */
+function EngineRow({ a }: { a: ProjectActivity }) {
+  const [open, setOpen] = useState(false);
+  const expandable = !!a.detail || !!a.steps?.length;
+  const tone = a.kind === "delivery" ? "#3dd68c" : a.kind === "recovery" ? "#f5b942" : "#6d7cff";
+  return (
+    <div className="rounded-lg border border-dashed border-line px-3 py-1.5">
+      <button type="button" onClick={() => expandable && setOpen((o) => !o)} className="flex w-full items-center gap-2 text-left text-[11.5px]">
+        {expandable ? (open ? <ChevronDown className="h-3 w-3 shrink-0 text-ink-3" /> : <ChevronRight className="h-3 w-3 shrink-0 text-ink-3" />) : <span className="w-3 shrink-0" />}
+        <span className="shrink-0 rounded px-1 text-[9.5px] uppercase tracking-wide" style={{ color: tone, background: `${tone}18` }}>{a.kind}</span>
+        <span className="min-w-0 flex-1 truncate text-ink-2">{a.text}</span>
+        {a.steps?.length ? <span className="shrink-0 text-[10px] text-ink-3">{a.steps.length} steps</span> : null}
+        <span className="shrink-0 num text-[10.5px] text-ink-3">{new Date(a.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+      </button>
+      {open && a.detail && <pre className="mt-1.5 whitespace-pre-wrap break-words text-[10.5px] text-ink-3">{a.detail}</pre>}
+      {open && a.steps?.length ? <div className="mt-1.5"><ActivityFeed events={a.steps} grouped /></div> : null}
+    </div>
   );
 }
 
