@@ -23,3 +23,21 @@ export function reviewOutcome(s: Pick<SessionRecord, "reviewStatus" | "reviewPol
   if (s.lastVerdict === "findings") return "findings";
   return "not_applicable";
 }
+
+/**
+ * What a delivery is about to ship, review-wise.
+ *
+ * Delivery is the last point at which "everything was checked" is still a
+ * correctable belief rather than something the owner has been told. A session
+ * the Director excused is its own decision and reads as one; a review that
+ * started and never finished is nobody's decision, and is named apart from it.
+ */
+export function reviewCoverageNote(sessions: Pick<SessionRecord, "key" | "status" | "reviewStatus" | "reviewPolicy" | "lastVerdict">[]): string {
+  const shipped = sessions.filter((s) => s.status === "completed");
+  const unreviewed = shipped.filter((s) => reviewOutcome(s) === "incomplete").map((s) => s.key);
+  const excused = shipped.filter((s) => reviewOutcome(s) === "skipped").map((s) => s.key);
+  return [
+    unreviewed.length ? `NOT REVIEWED — the Reviewer never finished on: ${unreviewed.join(", ")}. This work has not passed review; do not tell the owner it has.` : "",
+    excused.length ? `No independent review by your own decision on: ${excused.join(", ")}.` : "",
+  ].filter(Boolean).join(" ");
+}

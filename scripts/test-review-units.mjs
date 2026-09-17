@@ -23,6 +23,7 @@ async function test(name, fn) {
 // is why the topology check lives in its own file rather than inside director.ts
 const { checkpoint } = await import("../src/lib/projects/git.ts");
 const { contradictsInPlaceTopology } = await import("../src/lib/projects/topology.ts");
+const { reviewOutcome, reviewCoverageNote } = await import("../src/lib/projects/review-status.ts");
 
 const repos = [];
 function repo() {
@@ -108,6 +109,30 @@ try {
       assert(!hit, `false positive on "${r.slice(0, 60)}" -> ${hit}`);
     }
     return `${fine.length} accepted`;
+  });
+
+  await test("the policy answers the review question before the session has run", async () => {
+    assert(reviewOutcome({ reviewPolicy: "none" }) === "skipped", "a session excused from review reads as 'nothing to review' before it runs");
+    assert(reviewOutcome({ reviewPolicy: "required" }) === "not_applicable", "an unrun required session already claims an outcome");
+    assert(reviewOutcome({ reviewPolicy: "required", lastVerdict: "pass" }) === "passed", "a pass is not reported");
+    assert(reviewOutcome({ reviewPolicy: "none", reviewStatus: "incomplete" }) === "incomplete", "what actually happened must outrank the policy");
+    return "policy first, then what happened";
+  });
+
+  await test("delivery names what it is shipping unreviewed, and nothing else", async () => {
+    const note = reviewCoverageNote([
+      { key: "D1", status: "completed", reviewStatus: "incomplete", reviewPolicy: "required" },
+      { key: "D2", status: "completed", reviewStatus: null, reviewPolicy: "none" },
+      { key: "D3", status: "completed", reviewStatus: "passed", reviewPolicy: "required" },
+      { key: "D4", status: "abandoned", reviewStatus: null, reviewPolicy: "none" },
+    ]);
+    assert(/NOT REVIEWED/.test(note), `an unfinished review is not called out: ${note}`);
+    assert(/\bD1\b/.test(note), "the session whose reviewer never finished is not named");
+    assert(/No independent review by your own decision on: D2/.test(note), `the excused session is not named as the Director's own choice: ${note}`);
+    assert(!/\bD3\b/.test(note), "a session that passed review was listed as unreviewed");
+    assert(!/\bD4\b/.test(note), "a session that was never delivered was listed");
+    assert(reviewCoverageNote([{ key: "X", status: "completed", reviewStatus: "passed", reviewPolicy: "required" }]) === "", "a fully reviewed delivery still says something");
+    return note.slice(0, 96);
   });
 
   console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
