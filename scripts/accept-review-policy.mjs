@@ -189,8 +189,13 @@ try {
   /* ---------------- 5-9: who did the verifying ------------------------------- */
 
   await test("5 a normal Builder did not run an exhaustive duplicate QA pass", async () => {
-    const builds = work.filter((s) => (s.kind ?? "build") === "build" && s.reviewPolicy !== "none" && s.status === "completed");
-    if (!builds.length) return "no reviewed build session this run";
+    /*
+     * Only `required` belongs here. Under `spot_check` the session itself owns
+     * the substantive verification and the Reviewer audits it — a Builder doing
+     * a lot of checking there is the design working, not failing.
+     */
+    const builds = work.filter((s) => (s.kind ?? "build") === "build" && s.reviewPolicy === "required" && s.status === "completed");
+    if (!builds.length) return "no required-review build session this run";
     const rows = builds.map((s) => `${s.key} builder ${browserSteps(s, "Builder").length} vs reviewer ${browserSteps(s, "Reviewer").length} browser steps`);
     evidence.buildSplit = rows;
     // the previous behaviour had the Builder proving the whole request itself,
@@ -202,8 +207,8 @@ try {
   });
 
   await test("6 the Reviewer performed the main verification for normal build work", async () => {
-    const builds = work.filter((s) => (s.kind ?? "build") === "build" && s.reviewPolicy !== "none" && s.reviewsConsumed > 0);
-    if (!builds.length) return "no reviewed build session this run";
+    const builds = work.filter((s) => (s.kind ?? "build") === "build" && s.reviewPolicy === "required" && s.reviewsConsumed > 0);
+    if (!builds.length) return "no required-review build session this run";
     for (const s of builds) assert(steps(s, "Reviewer").length > 0, `${s.key}'s verdict has no reviewer work behind it`);
     const withBrowser = builds.filter((s) => browserSteps(s, "Reviewer").length > 0);
     return `${builds.map((s) => `${s.key}:${steps(s, "Reviewer").length} steps`).join(", ")}${withBrowser.length ? ` · ${withBrowser.length} used the browser` : ""}`;
