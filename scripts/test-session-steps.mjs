@@ -157,7 +157,12 @@ try {
   console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
 } finally {
   if (!KEEP) {
+    // delete by id, and sweep any project still pointing at this throwaway
+    // repository — the Director can rename a project, so a title is no handle
     if (projectId) await api(`/api/projects/${projectId}`, null, "DELETE").catch(() => {});
+    for (const p of (await api("/api/projects").catch(() => ({ projects: [] }))).projects ?? []) {
+      if (p.rootPath === root) await api(`/api/projects/${p.id}`, null, "DELETE").catch(() => {});
+    }
     for (const id of made) await api(`/api/agents/${id}`, null, "DELETE").catch(() => {});
     for (const d of [root, path.join(path.dirname(root), ".nexora-worktrees")]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* temp */ } }
     console.log("cleaned up");

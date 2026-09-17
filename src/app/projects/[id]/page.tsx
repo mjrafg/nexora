@@ -3,7 +3,7 @@
 import { Fragment, use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Pause, Play, Square, Trash2, Loader2, Send, Boxes, Activity as ActivityIcon, ChevronDown, ChevronRight, GitBranch, CheckCircle2, XCircle, Circle, CircleDot, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Download, ExternalLink, Pause, Play, Square, Trash2, Loader2, Send, Boxes, Activity as ActivityIcon, ChevronDown, ChevronRight, GitBranch, CheckCircle2, XCircle, Circle, CircleDot, AlertTriangle } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Panel } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
@@ -118,6 +118,12 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
           </h1>
           <p className="truncate font-mono text-[11px] text-ink-3">{project.rootPath}{project.integrationBranch ? ` · ${project.integrationBranch}` : ""}</p>
         </div>
+        <Link href={`/projects/${id}/director`}>
+          <Button variant="ghost" size="sm"><Boxes className="h-3.5 w-3.5" /> Director</Button>
+        </Link>
+        <a href={`/api/projects/${id}/export?format=markdown`} download>
+          <Button variant="ghost" size="sm"><Download className="h-3.5 w-3.5" /> Export</Button>
+        </a>
         {(canPause || canResume) && (
           <Button variant="ghost" size="sm" onClick={pauseResume} disabled={busy}>
             {canResume ? <><Play className="h-3.5 w-3.5" /> Resume</> : <><Pause className="h-3.5 w-3.5" /> Pause</>}
@@ -296,7 +302,10 @@ function SessionRow({ s, project, names, onStopped }: { s: SessionRecord; projec
     <div className="rounded-md border border-line/70 bg-black/20">
       <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[11.5px]">
         {s.status === "running" ? <Loader2 className="h-3 w-3 animate-spin text-brand" /> : s.status === "needs_attention" || s.status === "failed" || s.status === "timeout" ? <AlertTriangle className="h-3 w-3 text-warning" /> : <span className="h-2 w-2 rounded-full" style={{ background: color }} />}
-        <span className="font-mono text-ink-3">{s.key}</span>
+        <Link href={`/projects/${project.id}/sessions/${encodeURIComponent(s.key)}`} onClick={(e) => e.stopPropagation()}
+          className="shrink-0 font-mono text-ink-3 underline-offset-2 hover:text-brand hover:underline" title="Open this session">
+          {s.key}
+        </Link>
         <span className="truncate text-ink">{s.name}</span>
         <span className="ml-auto flex items-center gap-1.5 text-[10px] text-ink-3">
           {s.branch && <GitBranch className="h-3 w-3" />}
@@ -325,6 +334,16 @@ function SessionRow({ s, project, names, onStopped }: { s: SessionRecord; projec
             </div>
           )}
           {s.errorText && <div className="text-[#ff8ea3]">{s.errorText}</div>}
+          <div className="flex flex-wrap items-center gap-2">
+            <Link href={`/projects/${project.id}/sessions/${encodeURIComponent(s.key)}`}
+              className="inline-flex items-center gap-1 rounded-md border border-line px-1.5 py-0.5 text-[10.5px] text-ink-2 hover:border-brand/50 hover:text-ink">
+              <ExternalLink className="h-3 w-3" /> Open session
+            </Link>
+            <a href={`/api/projects/${project.id}/sessions/${encodeURIComponent(s.key)}/export?format=markdown`} download
+              className="inline-flex items-center gap-1 rounded-md border border-line px-1.5 py-0.5 text-[10.5px] text-ink-3 hover:border-brand/50 hover:text-ink">
+              <Download className="h-3 w-3" /> Export log
+            </a>
+          </div>
           <Facts s={s} project={project} names={names} />
           {s.steps && s.steps.length > 0 && (
             <details>

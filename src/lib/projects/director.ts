@@ -9,7 +9,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
-import { turnEmitter } from "@/lib/activity";
+import { recentActivity, turnEmitter } from "@/lib/activity";
+import { keepSteps } from "./steps";
 import { readDb } from "@/lib/store/db";
 import { agentRuntimeType, buildSystemPrompt, runAgentTurn } from "@/lib/runtime";
 import type { ExtraMcpServer } from "@/lib/runtime/types";
@@ -185,6 +186,7 @@ async function runDirectorTurn(projectId: string, message: string, kind: "user" 
     .slice(-16)
     .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
   const rt = agentRuntimeType(director.id) ?? "api";
+  const turnStart = Date.now();
   try {
     const result = await runAgentTurn({
       agentId: director.id,
@@ -203,7 +205,9 @@ async function runDirectorTurn(projectId: string, message: string, kind: "user" 
       freshPrompt: true,
     });
     if (result.sessionId) patchProject(projectId, { directorSessions: { ...getProject(projectId)!.directorSessions, [rt]: result.sessionId } });
-    addMessage({ projectId, role: "assistant", content: result.text || "(no reply)", usage: result.usage, toolCalls: result.toolCalls?.map((t) => ({ tool: t.tool, ok: t.ok, summary: (t.ok ? t.result : t.error ?? "").slice(0, 200) })) });
+    // the Director's own steps ride with its reply, the way a chat keeps them
+    const activity = keepSteps(recentActivity(projectChannel(projectId), turnStart).filter((e) => e.turnId === emit.turnId), 150_000);
+    addMessage({ projectId, role: "assistant", content: result.text || "(no reply)", usage: result.usage, activity, toolCalls: result.toolCalls?.map((t) => ({ tool: t.tool, ok: t.ok, summary: (t.ok ? t.result : t.error ?? "").slice(0, 200) })) });
   } catch (err) {
     const text = err instanceof Error ? err.message : String(err);
     addMessage({ projectId, role: "assistant", content: `Director turn failed: ${text}`, error: text });

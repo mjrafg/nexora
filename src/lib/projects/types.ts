@@ -146,6 +146,8 @@ export type ProjectMessage = {
   createdAt: string;
   toolCalls?: { tool: string; ok: boolean; summary: string }[];
   usage?: { inputTokens?: number; outputTokens?: number };
+  /** what the Director did to produce this reply — its own steps, kept */
+  activity?: import("@/lib/activity").ActivityEvent[];
   error?: string;
 };
 
