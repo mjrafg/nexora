@@ -30,6 +30,7 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
   const [error, setError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const [recents, setRecents] = useState<RecentFolder[]>([]);
+  const [startIn, setStartIn] = useState<string | null>(null);
 
   useEffect(() => {
     api.agents().then((r) => {
@@ -45,7 +46,13 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
     }).catch((e) => setError(errorText(e)));
     // the folders this company already builds in: usually the answer
     api.projects()
-      .then((r) => setRecents(r.projects.slice(0, 6).map((p) => ({ name: p.title, path: p.rootPath, meta: ago(p.updatedAt) }))))
+      .then((r) => {
+        setRecents(r.projects.slice(0, 6).map((p) => ({ name: p.title, path: p.rootPath, meta: ago(p.updatedAt) })));
+        // where the most recent project was made: the next one usually belongs
+        // beside it, not in whatever directory the server happens to open on
+        const newest = r.projects[0]?.rootPath;
+        if (newest) setStartIn(newest.replace(/\/+$/, "").replace(/\/[^/]+$/, "") || "/");
+      })
       .catch(() => undefined);
   }, []);
 
@@ -78,6 +85,7 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
               {picking ? (
                 <FolderPicker
                   value={rootPath || null}
+                  startIn={startIn}
                   suggestedName={folderNameFrom(title || goal)}
                   recents={recents}
                   recentsLabel="Projects you already have"

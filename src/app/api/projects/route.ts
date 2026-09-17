@@ -23,6 +23,11 @@ export async function GET() {
  */
 function provisionalTitle(goal: string): string {
   const firstLine = goal.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+  // When the goal names the thing — called "Mini Habit Tracker" — that name is
+  // the title, and no amount of clever truncation beats simply using it.
+  const named = /(?:called|named|titled)\s+[“"'\u2018\u201c]([^”"'\u2019\u201d]{2,60})[”"'\u2019\u201d]/i.exec(firstLine)
+    ?? /^[“"\u201c]([^”"\u201d]{2,60})[”"\u201d]/.exec(firstLine);
+  if (named) return named[1].trim();
   const sentence = firstLine.split(/(?<=[.!?])\s/)[0] ?? firstLine;
   // people open a request with a run of politeness; strip all of it, not one
   const asked = sentence.replace(/^((please|could you|can you|i want to|i'd like to|i would like to|we need to|help me)\s+)+/i, "");

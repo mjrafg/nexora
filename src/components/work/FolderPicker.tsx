@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronRight, CornerLeftUp, Folder, FolderOpen, FolderPlus, HardDrive, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { api, errorText, type DirListing } from "@/lib/client-api";
@@ -16,6 +16,7 @@ export type RecentFolder = { name: string; path: string; meta?: string };
 
 export function FolderPicker({
   value,
+  startIn,
   suggestedName,
   recents,
   recentsLabel = "Recent folders",
@@ -24,6 +25,8 @@ export function FolderPicker({
   onClose,
 }: {
   value: string | null;
+  /** where to open when nothing is chosen yet — usually where the last one was made */
+  startIn?: string | null;
   suggestedName?: string;
   /** folders already in use, so the common case is one click */
   recents?: RecentFolder[];
@@ -49,17 +52,26 @@ export function FolderPicker({
       .finally(() => setBusy(false));
   }, []);
 
+  const landed = useRef(false);
   useEffect(() => {
+    // Where to open: the folder already chosen, else where the last one was
+    // made — a second project usually belongs beside the first.
+    //
+    // `startIn` arrives after the caller has fetched its projects, which can
+    // land after this mounts. Re-running on it catches that, but only until
+    // the first listing is shown: once the reader has somewhere, a late answer
+    // must not pull the ground out from under them.
+    if (landed.current) return;
     let alive = true;
-    api.browseFolder(value || undefined)
+    api.browseFolder(value || startIn || undefined)
       .then((r) => {
         if (!alive) return;
-        if (r.listing) { setListing(r.listing); setTyped(r.listing.path); }
+        if (r.listing) { landed.current = true; setListing(r.listing); setTyped(r.listing.path); }
         else if (r.quickLinks?.length) browse(r.quickLinks[0].path);
       })
       .catch((e) => alive && setError(errorText(e)));
     return () => { alive = false; };
-  }, [value, browse]);
+  }, [value, startIn, browse]);
 
   /**
    * Make the folder and step into it.
