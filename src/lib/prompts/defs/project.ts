@@ -548,3 +548,20 @@ registerPrompt({
   "Do not re-run testing that a session above already did and reported with evidence. Re-test something only when you have a concrete reason: its review failed or never finished, its evidence is missing or contradicts what you see, you resolved a conflict, you changed behaviour here, or the instructions below ask for it explicitly.",
 ].join("\n"),
 });
+
+registerPrompt({
+  id: "project-reviewer-scope-spot-check",
+  name: "Reviewer scope — spot check",
+  description: "The Reviewer's remit when the Director asked for a light review rather than a full independent verification.",
+  category: "engineering",
+  version: 1,
+  required: true,
+  usedBy: ["Project Reviewer"],
+  defaultContent: [
+  "# Your remit on this session",
+  "The Director asked for a spot check rather than a full independent verification, because this session already did its own verifying.",
+  "Audit what it reported: is it complete against the request, is each claim actually supported by evidence, does anything contradict itself or the code, and is anything conspicuously missing?",
+  "Then independently re-check a small number of things — the highest-risk parts, and anything whose evidence looked thin. A handful is right.",
+  "Verify everything yourself only if the evidence is missing, inconsistent, or gives you concrete reason to distrust it — and say in your findings why you could not rely on it.",
+].join("\n"),
+});

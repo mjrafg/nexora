@@ -311,7 +311,16 @@ async function buildAndReview(a: {
   const willReview = policy !== "none";
   const reviewerCaps = reviewerAgent && willReview ? turnCapabilities(reviewerAgent, "reviewer") : { servers: [], permissions: [] };
   patchSession(projectId, key, { capabilities: { builder: builderCaps.permissions, reviewer: reviewerCaps.permissions } });
-  const verification = getPrompt(willReview && session.kind !== "qa" ? "project-builder-verify-light" : "project-builder-verify-full");
+  /*
+   * Light only when somebody else is doing the acceptance verification.
+   *
+   * `spot_check` means the Reviewer audits what this session reports, so this
+   * session has to have something worth auditing — telling its Builder to do
+   * the minimum would leave nobody verifying anything. Same for a QA session,
+   * whose whole job is the testing.
+   */
+  const builderVerifies = policy !== "required" || session.kind === "qa";
+  const verification = getPrompt(builderVerifies ? "project-builder-verify-full" : "project-builder-verify-light");
   const builderSystem = agentPrompt(builderId, `${getPrompt("project-builder-system")}\n\n${verification}\n\n${getPrompt("project-evidence-rule")}`, builderCaps);
   // registered immediately, not only once something spawns: a session on the
   // API runtime has no child process to kill, and must still be stoppable
@@ -390,7 +399,7 @@ async function buildAndReview(a: {
         scopeId: `session:${session.id}:review:${round}`,
         systemPrompt: agentPrompt(project!.reviewerAgentId, getPrompt("project-reviewer-role-line"), reviewerCaps),
         message: withSkills(
-          reviewPrompt({ originalRequest: session.originalRequest, subject, round, previous: round === 2 ? previous : undefined, kind: session.kind ?? "build" }),
+          reviewPrompt({ originalRequest: session.originalRequest, subject, round, previous: round === 2 ? previous : undefined, kind: session.kind ?? "build", policy }),
           // every review round is a fresh conversation of its own, so the
           // Reviewer's skills travel with each one
           skillBlock(session.reviewerSkills, { scopeId: `session:${session.id}:review:${round}`, agentId: project!.reviewerAgentId }),
