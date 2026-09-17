@@ -143,6 +143,7 @@ const mk = async (name, role, perms, rt = runtime) => {
 };
 
 let projectId = null;
+const extraRoots = [];
 const evidence = {};
 try {
   const dir = await mk(`RP Director ${tag}`, "Project Director", ["read_files"], runtimes.director);
@@ -392,16 +393,38 @@ try {
   });
 
   await test("15 the delivery cleanliness guard is still in force", async () => {
-    // plant a file no agent wrote, commit it as the engine would, and ask to deliver
-    const probe = path.join(root, "leftover.log");
-    fs.writeFileSync(probe, "planted by the acceptance run\n");
-    execFileSync("git", ["add", "leftover.log"], { cwd: root });
-    execFileSync("git", ["-c", "user.name=Nexora OS", "-c", "user.email=nexora@agent24.io", "commit", "-qm", "nexora: checkpoint probe"], { cwd: root });
+    /*
+     * Its own project and repository.
+     *
+     * This used to plant the file in the acceptance project and call deliver —
+     * after that project had already reached COMPLETED, which the engine
+     * refuses outright, so the guard was never reached and the check reported
+     * a failure that said nothing about the guard.
+     */
+    const groot = fs.mkdtempSync(path.join(os.tmpdir(), `nexora-guard-${tag}-`));
+    const ggit = (...x) => execFileSync("git", x, { cwd: groot, encoding: "utf8" });
+    fs.writeFileSync(path.join(groot, "README.md"), "# guard probe\n");
+    ggit("init", "-q", "-b", "main"); ggit("config", "user.email", "g@nexora.local"); ggit("config", "user.name", "guard");
+    ggit("add", "-A"); ggit("commit", "-qm", "start");
+    extraRoots.push(groot);
+
+    const { project: gp } = await api("/api/projects", { title: `Guard probe ${tag}`, rootPath: groot, goal: "Probe the delivery guard.", directorAgentId: dir.id, builderAgentId: bld.id, reviewerAgentId: rev.id });
+    // a file on the branch that no agent ever committed — exactly what the guard is for
+    ggit("checkout", "-q", "-b", `nexora/${gp.id.slice(0, 8)}/integration`);
+    fs.writeFileSync(path.join(groot, "leftover.log"), "planted by the acceptance run\n");
+    ggit("add", "leftover.log");
+    ggit("-c", "user.name=Nexora OS", "-c", "user.email=nexora@agent24.io", "commit", "-qm", "nexora: checkpoint probe");
+    const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "nexora.json"), "utf8"));
+    const rec = raw.projects.find((x) => x.id === gp.id);
+    rec.integrationBranch = `nexora/${gp.id.slice(0, 8)}/integration`;
+    rec.baseBranch = "main";
+    fs.writeFileSync(path.join(DATA_DIR, "nexora.json"), JSON.stringify(raw, null, 2));
+
     const token = fs.readFileSync(path.join(DATA_DIR, "internal-token"), "utf8").trim();
-    const r = await (await fetch(`${BASE}/api/internal/director`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token, projectId, op: "deliver", args: {} }) })).json();
-    execFileSync("git", ["reset", "-q", "--hard", "HEAD~1"], { cwd: root });
+    const r = await (await fetch(`${BASE}/api/internal/director`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token, projectId: gp.id, op: "deliver", args: {} }) })).json();
+    await api(`/api/projects/${gp.id}`, null, "DELETE").catch(() => {});
     assert(!r.ok, "delivery accepted a file nobody intentionally committed");
-    assert(/leftover\.log/.test(r.error ?? ""), `the guard did not name the file: ${String(r.error).slice(0, 200)}`);
+    assert(/leftover\.log/.test(r.error ?? ""), `the guard did not name the file: ${String(r.error).slice(0, 220)}`);
     return "an unintended file still blocks delivery, and is named";
   });
 
@@ -445,7 +468,7 @@ try {
       if (p.rootPath === root) await api(`/api/projects/${p.id}`, null, "DELETE").catch(() => {});
     }
     for (const id of made) await api(`/api/agents/${id}`, null, "DELETE").catch(() => {});
-    for (const d of [root, path.join(path.dirname(root), ".nexora-worktrees")]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* temp */ } }
+    for (const d of [root, ...extraRoots, path.join(path.dirname(root), ".nexora-worktrees")]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* temp */ } }
     console.log("cleaned up");
   } else console.log(`kept: project ${projectId} · repo ${root}`);
 }
