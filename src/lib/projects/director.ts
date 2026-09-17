@@ -46,6 +46,7 @@ import {
 import type { MilestoneInput, PendingRecovery, ProjectRecord, ReviewPolicy, SessionInput, SessionKind } from "./types";
 
 import { contradictsInPlaceTopology } from "./topology";
+import { swallowedParameter } from "./malformed";
 import { reviewCoverageNote } from "./review-status";
 
 const KINDS = new Set(["build", "qa", "cleanup"]);
@@ -388,6 +389,18 @@ export async function handleDirectorTool(projectId: string, name: string, args: 
   }
   if (["PAUSING", "PAUSED"].includes(project.state) && op !== "get_state") {
     return { ok: false, error: `The project is ${project.state}. Nothing can start, change, or complete while it is paused — ask the owner to press Resume.` };
+  }
+  // before anything reads the arguments: were they even delivered intact?
+  const mangled = swallowedParameter(args);
+  if (mangled) {
+    return {
+      ok: false,
+      error: [
+        `That call arrived malformed, so ${name} never received its arguments.`,
+        `The text of the \`${mangled.param}\` argument ended up inside the \`${mangled.field}\` string instead of being its own argument — \`${mangled.field}\` contains a literal "<parameter name=...>" tag.`,
+        `Send each argument as a real JSON value: \`${mangled.param}\` must be its own key, not markup embedded in another field. Nothing was changed; call ${name} again.`,
+      ].join("\n"),
+    };
   }
   const observe = (t: string) => queueObservation(projectId, t);
   try {

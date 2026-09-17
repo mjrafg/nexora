@@ -23,6 +23,7 @@ async function test(name, fn) {
 // is why the topology check lives in its own file rather than inside director.ts
 const { checkpoint } = await import("../src/lib/projects/git.ts");
 const { contradictsInPlaceTopology } = await import("../src/lib/projects/topology.ts");
+const { swallowedParameter } = await import("../src/lib/projects/malformed.ts");
 const { reviewOutcome, reviewCoverageNote, sessionVerification } = await import("../src/lib/projects/review-status.ts");
 
 // the registry is server-side; these stand in for it so the rule can be checked alone
@@ -173,6 +174,28 @@ try {
     assert(i === 0, "the responsibility block does not start with its own header");
     assert(i < j && j < k, `the verification text is not inside the wrapper: ${r.responsibility}`);
     return "wrapper opens, verification inside, engine closes";
+  });
+
+  await test("a tool call whose argument was swallowed says so, precisely", async () => {
+    // verbatim from the run that stalled: the sessions array ended up inside
+    // the reasoning string, so the engine saw no sessions and said so unhelpfully
+    const real = { milestone: "M2", reasoning: 'M2 typo fix",\n<parameter name="sessions">[{"key": "S2.1", "name": "Fix the README typo"' };
+    const hit = swallowedParameter(real);
+    assert(hit, "the malformed call from the real run was not recognised");
+    assert(hit.field === "reasoning", `wrong field named: ${hit.field}`);
+    assert(hit.param === "sessions", `wrong argument named: ${hit.param}`);
+    return `${hit.param} swallowed by ${hit.field}`;
+  });
+
+  await test("well-formed arguments are never called malformed", async () => {
+    for (const ok of [
+      { milestone: "M2", reasoning: "A typo fix needs no review.", sessions: [{ key: "S2.1" }] },
+      { milestone: "M1", reasoning: "Mentioning a <div> or an <input> tag is not a parameter." },
+      { instructions: "Compare <before> and <after> screenshots." },
+      { reasoning: "", sessions: [] },
+      { keys: ["S1.1"], timeout_minutes: 30 },
+    ]) assert(!swallowedParameter(ok), `false positive on ${JSON.stringify(ok).slice(0, 70)}`);
+    return "5 clean calls accepted";
   });
 
   console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
