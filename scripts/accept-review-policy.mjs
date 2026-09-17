@@ -101,8 +101,38 @@ console.log(`\n=== review-policy acceptance · director ${runtimes.director.mode
 const tag = Date.now().toString(36).slice(-5);
 const root = fs.mkdtempSync(path.join(os.tmpdir(), `nexora-rp-${tag}-`));
 const git = (...a) => execFileSync("git", a, { cwd: root, encoding: "utf8" });
-fs.writeFileSync(path.join(root, "README.md"), `# Unit Converter ${tag}\n\nA one-page converter. Teh app is not built yet.\n`);
-fs.writeFileSync(path.join(root, "index.html"), "<!doctype html>\n<title>Unit Converter</title>\n<h1>Unit Converter</h1>\n");
+
+/*
+ * Two fixtures.
+ *
+ * `static` is a one-file page: enough to watch the Director's policy
+ * judgement, and unable to exercise anything else — no install, no build, no
+ * test command, no server. The failures this suite exists to catch all lived
+ * in a project that had those.
+ *
+ * `build` is that project's shape: TypeScript, a bundler, a test runner, and a
+ * definition of done stated as commands. It is the only one of the two that
+ * can show whether a Reviewer can actually run what it was asked to verify.
+ */
+const SCENARIO = process.env.RP_SCENARIO === "build" ? "build" : "static";
+const write = (rel, text) => { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), text); };
+
+if (SCENARIO === "build") {
+  write("package.json", JSON.stringify({
+    name: "unit-converter", private: true, version: "0.0.0", type: "module",
+    scripts: { dev: "vite", build: "tsc --noEmit && vite build", preview: "vite preview", test: "vitest run" },
+    devDependencies: { typescript: "^5.6.0", vite: "^5.4.0", vitest: "^2.1.0" },
+  }, null, 2) + "\n");
+  write("tsconfig.json", JSON.stringify({ compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", strict: true, noEmit: true, lib: ["ES2022", "DOM"], types: ["vitest/globals"] }, include: ["src"] }, null, 2) + "\n");
+  write("index.html", '<!doctype html>\n<title>Unit Converter</title>\n<h1>Unit Converter</h1>\n<div id="app"></div>\n<script type="module" src="/src/main.ts"></script>\n');
+  write("src/convert.ts", "// TODO: the conversion functions belong here.\nexport {};\n");
+  write("src/main.ts", "// TODO: wire the UI to the conversion functions.\nexport {};\n");
+  write("README.md", `# Unit Converter ${tag}\n\nTeh app is not built yet.\n\n    npm install && npm run build && npm test\n`);
+  write(".gitignore", "node_modules\ndist\n*.log\n");
+} else {
+  write("README.md", `# Unit Converter ${tag}\n\nA one-page converter. Teh app is not built yet.\n`);
+  write("index.html", "<!doctype html>\n<title>Unit Converter</title>\n<h1>Unit Converter</h1>\n");
+}
 git("init", "-q", "-b", "main"); git("config", "user.email", "rp@nexora.local"); git("config", "user.name", "rp");
 git("add", "-A"); git("commit", "-qm", "start");
 
@@ -124,7 +154,19 @@ try {
   const { project } = await api("/api/projects", {
     title: `Unit Converter ${tag}`,
     rootPath: root,
-    goal: [
+    goal: (SCENARIO === "build" ? [
+      "This repository is a Vite + TypeScript scaffold for a one-page unit converter. The dependencies are declared but not installed and the source files are stubs. Finish it.",
+      "",
+      "Three separate pieces of work, of quite different weight:",
+      "1. The conversion feature: `src/convert.ts` exports the temperature conversions (celsius/fahrenheit/kelvin, every direction, correct for zero and negatives), and `src/main.ts` wires a number input and two unit selects to a live result. The arithmetic is the part worth getting wrong-proof.",
+      "2. A typo fix: README.md says 'Teh app'. It should say 'The app'. That is the entire change.",
+      "3. Unit tests for the conversion functions, run by the project's own test script, plus a written record of what was checked.",
+      "",
+      "DEFINITION OF DONE for the project as a whole: `npm install`, then `npm run build` (tsc --noEmit && vite build) and `npm test` (vitest run) all succeed, and the built app works when served.",
+      "",
+      "You decide how to organise this into milestones and sessions, who runs each one, and — for each session — whether an independent review is worth its cost. Judge that from the work in front of you, not by habit.",
+      "Where a claim needs the browser to be true, use the browser against the app as it is actually served, not against a file opened off disk. Report anything you could not check as UNVERIFIED. Do not leave scratch, log or notes files behind.",
+    ] : [
       "This repository holds a stub one-page unit converter (index.html). Finish it, as plain HTML/CSS/JS with no build step, no dependencies and no backend.",
       "",
       "Three separate pieces of work, of quite different weight:",
@@ -134,7 +176,7 @@ try {
       "",
       "You decide how to organise this into milestones and sessions, who runs each one, and — for each session — whether an independent review is worth its cost. Judge that from the work in front of you, not by habit.",
       "Where a claim needs the browser to be true, use the browser. Report anything you could not check as UNVERIFIED. Do not leave scratch, log or notes files behind.",
-    ].join("\n"),
+    ]).join("\n"),
     directorAgentId: dir.id, builderAgentId: bld.id, reviewerAgentId: rev.id,
   });
   projectId = project.id;
