@@ -165,7 +165,10 @@ export function toMarkdown(b: ProjectExport): string {
     out.push(...sessionToMarkdown(b.session, b.agents.builder, b.agents.reviewer));
     if (b.activity.length) {
       out.push("## Engine log for this session", "");
-      for (const a of b.activity) out.push(`- \`${new Date(a.ts).toLocaleString()}\` **${a.kind}** — ${a.text}${a.detail ? `\n  > ${a.detail.replace(/\n/g, "\n  > ")}` : ""}`);
+      for (const a of b.activity) {
+        out.push(`- \`${new Date(a.ts).toLocaleString()}\` **${a.kind}** — ${a.text}${a.detail ? `\n  > ${a.detail.replace(/\n/g, "\n  > ")}` : ""}`);
+        if (a.steps?.length) { out.push(""); for (const e of a.steps) out.push(...stepToMarkdown(e)); }
+      }
       out.push("");
     }
     return out.join("\n");
@@ -194,7 +197,11 @@ export function toMarkdown(b: ProjectExport): string {
   }
 
   out.push("## Engine log", "");
-  for (const a of b.activity) out.push(`- \`${new Date(a.ts).toLocaleString()}\` **${a.kind}** — ${a.text}${a.detail ? `\n  > ${a.detail.replace(/\n/g, "\n  > ")}` : ""}`);
+  for (const a of b.activity) {
+    out.push(`- \`${new Date(a.ts).toLocaleString()}\` **${a.kind}** — ${a.text}${a.detail ? `\n  > ${a.detail.replace(/\n/g, "\n  > ")}` : ""}`);
+    // a review's own steps, where it has them
+    if (a.steps?.length) { out.push(""); for (const e of a.steps) out.push(...stepToMarkdown(e)); }
+  }
   out.push("");
   return out.join("\n");
 }

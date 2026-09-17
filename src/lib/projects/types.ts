@@ -149,6 +149,14 @@ export type ProjectActivity = {
   kind: ActivityKind;
   text: string;
   detail?: string | null;
+  /**
+   * What an agent did to produce this line, when one did.
+   *
+   * A plan or recovery review is a real turn by the Reviewer, but it belongs to
+   * no session and to no Director reply — so its steps had nowhere to live and
+   * the record showed a verdict with nothing behind it.
+   */
+  steps?: import("@/lib/activity").ActivityEvent[];
 };
 
 /** Director ↔ owner conversation entries (the Project Chat). */

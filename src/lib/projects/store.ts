@@ -6,7 +6,7 @@
 
 import { newId, now, readDb, updateDb } from "@/lib/store/db";
 import { emitActivity } from "@/lib/activity";
-import { isAgentBusy } from "@/lib/runtime/stop";
+import { liveTurnsOf } from "@/lib/runtime/stop";
 import { MAX_REVIEW_ROUNDS } from "./prompts";
 import type {
   ActivityKind,
@@ -68,15 +68,25 @@ export function toProjectView(p: ProjectRecord): ProjectView {
   const milestones = milestonesOf(p.id);
   const all = milestones.flatMap((m) => m.sessions);
   const running = all.filter((s) => s.status === "running");
-  // RUNNING is the project's state — "not paused, not finished" — and it stays
-  // RUNNING while the Director sits between turns. Whether anything is
-  // happening THIS SECOND is a different question, and the only honest answer
-  // is which of its agents is actually holding a turn right now.
+  /*
+   * RUNNING is the project's state — "not paused, not finished" — and it stays
+   * RUNNING while the Director sits between turns. Whether anything is
+   * happening THIS SECOND is a different question, answered by which of its
+   * agents is holding a turn right now.
+   *
+   * "Holding a turn" is not enough on its own: agents are shared, so one
+   * Reviewer can serve every project in the company. A turn counts here only
+   * if its work scope belongs to THIS project — otherwise a paused project
+   * reports itself busy because its Reviewer is occupied somewhere else.
+   */
+  const ours = new Set(all.map((s) => `session:${s.id}`));
+  const mine = (scope: string) => scope.startsWith(`project:${p.id}`) || ours.has(scope) || [...ours].some((x) => scope.startsWith(`${x}:`));
   const roles: [string, string][] = [[p.directorAgentId, "Director"], [p.builderAgentId, "Builder"], [p.reviewerAgentId, "Reviewer"]];
   const seen = new Set<string>();
   const busy: { name: string; role: string }[] = [];
   for (const [id, role] of [...roles, ...running.map((s) => [s.agentId ?? p.builderAgentId, "Builder"] as [string, string])]) {
-    if (seen.has(id) || !isAgentBusy(id)) continue;
+    if (seen.has(id)) continue;
+    if (!liveTurnsOf(id).some((t) => mine(t.chatId))) continue;
     seen.add(id);
     busy.push({ name: name(id), role });
   }
@@ -334,8 +344,8 @@ export function dirBusyWithin(projectId: string, cwd: string, exceptKey?: string
 
 /* ---------------------------------------------------------------- activity + chat */
 
-export function addActivity(projectId: string, kind: ActivityKind, text: string, detail?: string): void {
-  const rec: ProjectActivity = { id: newId(), projectId, ts: Date.now(), kind, text: text.slice(0, 500), detail: detail?.slice(0, 4_000) ?? null };
+export function addActivity(projectId: string, kind: ActivityKind, text: string, detail?: string, steps?: ProjectActivity["steps"]): void {
+  const rec: ProjectActivity = { id: newId(), projectId, ts: Date.now(), kind, text: text.slice(0, 500), detail: detail?.slice(0, 4_000) ?? null, ...(steps?.length ? { steps } : {}) };
   updateDb((d) => {
     d.projectActivity.push(rec);
     if (d.projectActivity.length > 5000) d.projectActivity.splice(0, d.projectActivity.length - 5000);

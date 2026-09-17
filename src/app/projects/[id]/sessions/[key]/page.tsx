@@ -8,7 +8,9 @@ import { Panel } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { ActivityFeed } from "@/components/agents/ActivityFeed";
-import { api, errorText, type ActivityEvent } from "@/lib/client-api";
+import { api, errorText, type ActivityEvent, type SkillView } from "@/lib/client-api";
+import { TOOL_CATALOG } from "@/lib/runtime/catalog";
+import type { AgentView } from "@/lib/runtime/types";
 import type { ProjectView, SessionRecord } from "@/lib/projects/types";
 import { cn } from "@/lib/utils";
 
@@ -30,6 +32,9 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
   const [project, setProject] = useState<ProjectView | null>(null);
   const [live, setLive] = useState<ActivityEvent[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
+  const [agents, setAgents] = useState<AgentView[]>([]);
+  const [skills, setSkills] = useState<SkillView[]>([]);
+  const [servers, setServers] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const [now, setNow] = useState(0);
@@ -39,7 +44,9 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
   }, [id]);
   useEffect(() => {
     load();
-    api.agents().then((r) => setNames(Object.fromEntries(r.agents.map((a) => [a.id, a.name])))).catch(() => {});
+    api.agents().then((r) => { setAgents(r.agents); setNames(Object.fromEntries(r.agents.map((a) => [a.id, a.name]))); }).catch(() => {});
+    api.skills().then((r) => setSkills(r.skills)).catch(() => {});
+    api.mcpServers().then((r) => setServers(Object.fromEntries(r.servers.map((x) => [x.id, x.name])))).catch(() => {});
   }, [load]);
 
   const session: SessionRecord | undefined = useMemo(
@@ -160,13 +167,26 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
               <Fact k="Started" v={session.startedAt ? new Date(session.startedAt).toLocaleString() : "—"} />
               {elapsed > 0 && <Fact k="Elapsed" v={`${elapsed < 90 ? `${elapsed}s` : `${Math.round(elapsed / 60)}m`}${session.endedAt ? "" : " and counting"}`} />}
               {session.tokens && <Fact k="Model turns" v={`${session.tokens.turns} · ${session.tokens.input.toLocaleString()} in / ${session.tokens.output.toLocaleString()} out`} />}
-              {session.grants?.tools.length ? <Fact k="Granted for this session" v={<span className="text-[#f5b942]">{session.grants.tools.join(", ")}</span>} /> : null}
-              {session.grants?.servers.length ? <Fact k="Granted tool servers" v={<span className="text-[#f5b942]">{session.grants.servers.length}</span>} /> : null}
-              {session.skills?.skillIds.length ? <Fact k="Builder skills" v={session.skills.skillIds.join(", ")} /> : null}
-              {session.reviewerSkills?.skillIds.length ? <Fact k="Reviewer skills" v={session.reviewerSkills.skillIds.join(", ")} /> : null}
               {session.dependsOn.length ? <Fact k="Depends on" v={session.dependsOn.join(", ")} /> : null}
               {session.stopReason && <Fact k="Stopped by" v={session.stopReason.replace("_", " ")} />}
             </dl>
+          </Panel>
+
+          <Panel title="What these agents were given" subtitle="for this session only">
+            <div className="space-y-3">
+              <Given
+                role="Builder" who={builder}
+                agent={agents.find((a) => a.id === (session.agentId ?? project.builderAgentId))}
+                grant={session.grants} servers={servers}
+                skills={(session.skills?.skillIds ?? []).map((id) => skills.find((s2) => s2.id === id)?.name ?? id)}
+              />
+              <Given
+                role="Reviewer" who={project.reviewerAgentName}
+                agent={agents.find((a) => a.id === project.reviewerAgentId)}
+                grant={null} servers={servers}
+                skills={(session.reviewerSkills?.skillIds ?? []).map((id) => skills.find((s2) => s2.id === id)?.name ?? id)}
+              />
+            </div>
           </Panel>
 
           {session.lastFindings.length > 0 && (
@@ -195,6 +215,67 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
         </div>
       </div>
     </AppShell>
+  );
+}
+
+/**
+ * What one role could reach in this session, and where each piece came from.
+ *
+ * A permission the agent already held and one the Director handed it for this
+ * session read the same at the point of use and mean very different things
+ * afterwards — the first is permanent and follows the agent everywhere, the
+ * second ends with the session. They are shown apart for that reason.
+ */
+function Given({ role, who, agent, grant, skills, servers }: {
+  role: string;
+  who: string;
+  agent?: AgentView;
+  grant?: { tools: string[]; servers: string[] } | null;
+  skills: string[];
+  servers: Record<string, string>;
+}) {
+  const label = (id: string) => TOOL_CATALOG.find((t) => t.id === id)?.label ?? id;
+  const own = (agent?.toolPermissions ?? []).filter((t) => !(grant?.tools ?? []).includes(t));
+  const granted = grant?.tools ?? [];
+  const grantedServers = grant?.servers ?? [];
+  return (
+    <div className="rounded-lg border border-line bg-white/[0.02] p-2.5">
+      <div className="mb-1.5 flex items-baseline gap-2 text-[11.5px]">
+        <span className="font-medium text-ink">{who}</span>
+        <span className="text-ink-3">{role}</span>
+      </div>
+      <Line k="Skills">
+        {skills.length
+          ? skills.map((n) => <Chip key={n} tone="#6d7cff">{n}</Chip>)
+          : <span className="text-ink-3">none selected</span>}
+      </Line>
+      <Line k="Its own permissions">
+        {own.length ? own.map((t) => <Chip key={t} tone="#aab2c5">{label(t)}</Chip>) : <span className="text-ink-3">none</span>}
+      </Line>
+      <Line k="Granted for this session">
+        {granted.length || grantedServers.length ? (
+          <>
+            {granted.map((t) => <Chip key={t} tone="#f5b942">{label(t)}</Chip>)}
+            {grantedServers.map((id) => <Chip key={id} tone="#f5b942">{servers[id] ?? id} (tools)</Chip>)}
+          </>
+        ) : <span className="text-ink-3">nothing — it ran with what it already had</span>}
+      </Line>
+    </div>
+  );
+}
+
+function Line({ k, children }: { k: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 py-0.5 text-[11px]">
+      <span className="w-[150px] shrink-0 text-ink-3">{k}</span>
+      <span className="flex min-w-0 flex-wrap gap-1">{children}</span>
+    </div>
+  );
+}
+
+function Chip({ children, tone }: { children: React.ReactNode; tone: string }) {
+  return (
+    <span className="rounded-md border px-1.5 py-px text-[10.5px]" style={{ borderColor: `${tone}55`, color: tone }}>{children}</span>
   );
 }
 

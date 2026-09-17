@@ -450,14 +450,18 @@ function Facts({ s, project, names }: { s: SessionRecord; project: ProjectView; 
 
 function ActivityRow({ a }: { a: ProjectActivity }) {
   const [open, setOpen] = useState(false);
+  // a plan or recovery review carries what the Reviewer actually did
+  const expandable = !!a.detail || !!a.steps?.length;
   return (
     <div className="rounded-md border border-line/70 bg-black/10 px-2 py-1 text-[11px]">
-      <button type="button" onClick={() => a.detail && setOpen((o) => !o)} className="flex w-full items-start gap-2 text-left">
+      <button type="button" onClick={() => expandable && setOpen((o) => !o)} className="flex w-full items-start gap-2 text-left">
         <span className="shrink-0 num text-ink-3">{new Date(a.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
         <span className="shrink-0 rounded bg-white/[0.06] px-1 text-[9.5px] uppercase text-ink-3">{a.kind}</span>
         <span className="text-ink-2">{a.text}</span>
+        {a.steps?.length ? <span className="ms-auto shrink-0 text-[10px] text-ink-3">{a.steps.length} steps</span> : null}
       </button>
       {open && a.detail && <pre className="mt-1 whitespace-pre-wrap break-words text-[10.5px] text-ink-3">{a.detail}</pre>}
+      {open && a.steps?.length ? <div className="mt-1.5"><ActivityFeed events={a.steps} grouped /></div> : null}
     </div>
   );
 }

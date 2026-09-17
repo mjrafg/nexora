@@ -220,13 +220,14 @@ async function runDirectorTurn(projectId: string, message: string, kind: "user" 
 
 /* ---------------------------------------------------------------- reviews after a turn */
 
-async function reviewArtifact(projectId: string, prompt: string, round: number): Promise<{ verdict: "pass" | "findings"; findingsText: string } | null> {
+async function reviewArtifact(projectId: string, prompt: string, round: number): Promise<{ verdict: "pass" | "findings"; findingsText: string; steps: ReturnType<typeof keepSteps> } | null> {
   const project = getProject(projectId)!;
   const reviewer = readDb().agents.find((a) => a.id === project.reviewerAgentId);
   const emit = turnEmitter(projectChannel(projectId), `review:${round}`, {
     actor: { agentId: project.reviewerAgentId, name: reviewer?.name ?? "Reviewer", role: "Reviewer" },
     mirror: [project.reviewerAgentId],
   });
+  const startedAt = Date.now();
   try {
     const r = await runAgentTurn({
       agentId: project.reviewerAgentId,
@@ -241,7 +242,20 @@ async function reviewArtifact(projectId: string, prompt: string, round: number):
       timeoutMs: 10 * 60_000,
     });
     const parsed = parseVerdict(r.text);
-    return { verdict: parsed.verdict, findingsText: findingsAsText(parsed.items) };
+    /*
+     * Keep everything, including the closing note.
+     *
+     * Elsewhere that note is dropped because the reply is shown beside it and
+     * the pair reads as a stutter. A review has no reply bubble: a PASS records
+     * only "accepted by the independent reviewer", so its reasoning lives
+     * nowhere else. A review that inspects nothing is then one note — which is
+     * an honest record of a turn that only read the plan it was handed.
+     */
+    const steps = keepSteps(
+      recentActivity(projectChannel(projectId), startedAt).filter((e) => e.turnId === emit.turnId),
+      120_000,
+    );
+    return { verdict: parsed.verdict, findingsText: findingsAsText(parsed.items), steps };
   } catch {
     return null;
   }
@@ -271,11 +285,11 @@ async function processAfterTurn(projectId: string): Promise<void> {
     }
     if (review.verdict === "pass") {
       patchProject(projectId, { planReviewRound: 0 });
-      addActivity(projectId, "review", `Plan accepted by the independent reviewer (round ${round})`);
+      addActivity(projectId, "review", `Plan accepted by the independent reviewer (round ${round})`, undefined, review.steps);
       acceptPlan(projectId);
       return;
     }
-    addActivity(projectId, "review", `Plan review round ${round}: findings returned`, review.findingsText);
+    addActivity(projectId, "review", `Plan review round ${round}: findings returned`, review.findingsText, review.steps);
     patchProject(projectId, { planReviewRound: round + 1 });
     await runDirectorTurn(projectId, render(round === 1 ? getPrompt("project-plan-findings-message") : getPrompt("project-plan-final-message"), { findings: review.findingsText }), "observation");
     await processAfterTurn(projectId);
@@ -301,7 +315,7 @@ async function processAfterTurn(projectId: string): Promise<void> {
     );
     if (!review || review.verdict === "pass") {
       patchProject(projectId, { pendingRecovery: null });
-      addActivity(projectId, "review", review ? `Recovery decision for ${pending.sessionKey} accepted by the reviewer (round ${pending.round})` : `Recovery review could not run — decision for ${pending.sessionKey} applied unreviewed`);
+      addActivity(projectId, "review", review ? `Recovery decision for ${pending.sessionKey} accepted by the reviewer (round ${pending.round})` : `Recovery review could not run — decision for ${pending.sessionKey} applied unreviewed`, undefined, review?.steps);
       await applyRecovery(projectId, pending);
       return;
     }
