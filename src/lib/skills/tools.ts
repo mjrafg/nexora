@@ -23,7 +23,7 @@ const TOOLS: InternalToolDef[] = [
       "The engineering skills available for this work: id, what each is for, and which part of the work it suits. Descriptions only — call read_skill for the instructions themselves. Use it when you are deciding how to approach something, or when what you were given does not cover what you have run into.",
     inputSchema: {
       type: "object",
-      properties: { phase: { type: "string", description: `Narrow to one part of the work: ${SKILL_PHASES.join(" | ")}. Omit for everything available.` } },
+      properties: { phase: { type: "string", description: `Narrow the list to skills usually reached for in one part of the work: ${SKILL_PHASES.join(" | ")}. This is a filter on the listing, not a restriction: any skill may be given to any role when the work calls for it. Omit for everything available.` } },
     },
   },
   {
@@ -54,6 +54,7 @@ export const skillsToolServer: InternalToolServer = registerToolServer({
         if (!list.length) return ok(JSON.stringify({ skills: [], note: "No skills are available. The owner controls this in Settings → Skills." }, null, 1));
         return ok(JSON.stringify({
           library_revision: LIBRARY_REVISION,
+          note: "\"phases\" says where a skill usually earns its keep. It is guidance, not a restriction — a Reviewer judging a UI may legitimately be given the UI skill.",
           skills: list.map((x) => ({
             skill_id: x.id,
             name: x.name,

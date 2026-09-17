@@ -51,7 +51,7 @@ const CATALOG: Omit<SkillDef, "body" | "description" | "name">[] = [
     references: ["accessibility-checklist", "performance-checklist"],
     defaultEnabled: true,
     adaptation:
-      "This document assumes a browser/DevTools integration for visual checking. A Nexora Builder has Read, Glob, Grep, Write, Edit, Bash, WebSearch and WebFetch — no browser. Use it for what it says about structure, accessibility and state; where it asks you to look at a rendered page, say plainly in your result that you could not, rather than claiming you did.",
+      "This document assumes a browser and DevTools for visual checking. In Nexora that depends on the agent: if your tools include Nexora's browser, use it — open the page, look at it, and say what you saw. If they do not, use this document for what it says about structure, accessibility and state, and report anything that needs a rendered page as UNVERIFIED, naming what you could not check. Never describe a width you did not view, a focus ring you did not see, or a console you did not read.",
   },
   {
     id: "code-review-and-quality",

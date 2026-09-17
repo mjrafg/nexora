@@ -107,15 +107,54 @@ export async function mergeDependencyBranches(dir: string, branches: string[]): 
   return merged;
 }
 
-/** Commit everything in the checkout as a checkpoint named after the request. Returns the commit hash or null. */
-export async function checkpoint(dir: string, request: string): Promise<string | null> {
+/**
+ * Commit whatever a session left behind, so work is never lost.
+ *
+ * The subject names the session. It used to be the first 72 characters of the
+ * Builder's brief, which for an integration session produced commits titled
+ * "nexora: This is a milestone INTEGRATION session. You are on the project
+ * integrat" — prompt text in the project's permanent history.
+ *
+ * `add -A` is deliberate: a half-finished change the agent did not commit is
+ * still work, and losing it is worse than committing it. What it sweeps is
+ * reported back so delivery can question anything that arrived this way.
+ */
+export async function checkpoint(dir: string, label: string): Promise<{ hash: string; swept: string[] } | null> {
+  const pending = await git(dir, ["status", "--porcelain"]);
+  if (!pending.stdout.trim()) return null;
+  // files the agent never staged itself — the ones worth questioning later
+  const swept = pending.stdout
+    .split("\n")
+    .filter((l) => l.startsWith("??"))
+    .map((l) => l.slice(3).trim())
+    .filter(Boolean);
   await git(dir, ["add", "-A"]);
-  const status = await git(dir, ["status", "--porcelain"]);
-  if (!status.stdout.trim()) return null;
-  const msg = `nexora: ${request.replace(/\s+/g, " ").trim().slice(0, 72) || "checkpoint"}`;
+  const msg = `nexora: checkpoint ${label.replace(/\s+/g, " ").trim().slice(0, 60) || "session"}`;
   const c = await git(dir, ["-c", "user.name=Nexora OS", "-c", "user.email=nexora@agent24.io", "commit", "-q", "-m", msg]);
   if (!c.ok) return null;
-  return (await git(dir, ["rev-parse", "--short", "HEAD"])).stdout || null;
+  const hash = (await git(dir, ["rev-parse", "--short", "HEAD"])).stdout || null;
+  return hash ? { hash, swept } : null;
+}
+
+/**
+ * Files on `branch` whose every commit was made by the engine's checkpoint.
+ *
+ * A file the agent committed itself was a deliberate act. A file that only
+ * ever arrived because a checkpoint swept the working tree may be a scratch
+ * artifact — a note the session wrote to itself — and should be looked at
+ * before it ships. This is evidence from history, not a guess from a filename.
+ */
+export async function checkpointOnlyFiles(dir: string, branch: string): Promise<string[]> {
+  const listed = await git(dir, ["ls-tree", "-r", "--name-only", branch]);
+  if (!listed.ok) return [];
+  const out: string[] = [];
+  for (const file of listed.stdout.split("\n").map((f) => f.trim()).filter(Boolean)) {
+    const authors = await git(dir, ["log", "--format=%an", branch, "--", file]);
+    if (!authors.ok) continue;
+    const who = authors.stdout.split("\n").map((a) => a.trim()).filter(Boolean);
+    if (who.length && who.every((a) => a === "Nexora OS")) out.push(file);
+  }
+  return out;
 }
 
 export type WorktreeSnapshot = { porcelain: string; head: string };

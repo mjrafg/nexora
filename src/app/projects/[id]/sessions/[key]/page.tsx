@@ -2,12 +2,13 @@
 
 import { use, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Download, GitBranch, Loader2, Square } from "lucide-react";
+import { ArrowLeft, Download, GitBranch, Globe, Loader2, Square } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Panel } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { ActivityFeed } from "@/components/agents/ActivityFeed";
+import { BrowserDock } from "@/components/agents/BrowserDock";
 import { api, errorText, type ActivityEvent, type SkillView } from "@/lib/client-api";
 import { TOOL_CATALOG } from "@/lib/runtime/catalog";
 import type { AgentView } from "@/lib/runtime/types";
@@ -38,6 +39,15 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
   const [error, setError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const [now, setNow] = useState(0);
+  /*
+   * Whose browser to watch.
+   *
+   * Both roles can hold one now, and during a build they take turns: the
+   * Builder while it works, the Reviewer while it checks. Default to whoever
+   * is mid-turn so opening the dock shows something live, and let the owner
+   * pin the other one when they want to follow it instead.
+   */
+  const [dockFor, setDockFor] = useState<string | null>(null);
 
   const load = useCallback(() => {
     api.project(id).then((r) => { setProject(r.project); setError(null); }).catch((e) => setError(errorText(e)));
@@ -113,6 +123,14 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
     );
   }
 
+  const builderId = session.agentId ?? project.builderAgentId;
+  const canWatch = (id: string, role: "builder" | "reviewer") =>
+    (session.capabilities?.[role] ?? agents.find((a) => a.id === id)?.toolPermissions ?? []).includes("browser");
+  const browserAgents = agents.filter((a) =>
+    (a.id === builderId && canWatch(builderId, "builder")) || (a.id === project.reviewerAgentId && canWatch(project.reviewerAgentId, "reviewer")));
+  const workingAgent = browserAgents.find((a) => project.busy.some((b) => b.name === a.name));
+  const dockAgent = dockFor ? agents.find((a) => a.id === dockFor) : null;
+
   const color = STATUS_COLOR[session.status] ?? "#6f7890";
   const started = session.startedAt ? new Date(session.startedAt).getTime() : 0;
   const ended = session.endedAt ? new Date(session.endedAt).getTime() : 0;
@@ -135,6 +153,11 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
               {stopping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />} Stop
             </Button>
           )}
+          {browserAgents.length > 0 && (
+            <Button variant={dockFor ? "outline" : "ghost"} size="sm" onClick={() => setDockFor(dockFor ? null : (workingAgent ?? browserAgents[0]).id)} title="Watch this session's browser">
+              <Globe className="h-3.5 w-3.5" /> Browser
+            </Button>
+          )}
           <a href={`/api/projects/${id}/sessions/${encodeURIComponent(key)}/export?format=markdown`} download>
             <Button variant="outline" size="sm"><Download className="h-3.5 w-3.5" /> Export log</Button>
           </a>
@@ -146,7 +169,8 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
 
       {error && <div className="glass mb-3 rounded-2xl p-3 text-[12.5px] text-[#ff8ea3]">{error}</div>}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
+      <div className="flex min-h-0 gap-4">
+      <div className={cn("grid min-w-0 flex-1 gap-4", !dockAgent && "xl:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]")}>
         <Panel title="What the agents did" subtitle={runningNow ? "live — updating as it works" : `${steps.length} step${steps.length === 1 ? "" : "s"}, kept with the session`}>
           {steps.length === 0 ? (
             <p className="text-[12px] text-ink-3">
@@ -177,12 +201,14 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
               <Given
                 role="Builder" who={builder}
                 agent={agents.find((a) => a.id === (session.agentId ?? project.builderAgentId))}
+                attached={session.capabilities?.builder}
                 grant={session.grants} servers={servers}
                 skills={(session.skills?.skillIds ?? []).map((id) => skills.find((s2) => s2.id === id)?.name ?? id)}
               />
               <Given
                 role="Reviewer" who={project.reviewerAgentName}
                 agent={agents.find((a) => a.id === project.reviewerAgentId)}
+                attached={session.capabilities?.reviewer}
                 grant={null} servers={servers}
                 skills={(session.reviewerSkills?.skillIds ?? []).map((id) => skills.find((s2) => s2.id === id)?.name ?? id)}
               />
@@ -214,6 +240,23 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
           </Panel>
         </div>
       </div>
+
+      {dockAgent && (
+        <div className="flex min-h-0 flex-col gap-2">
+          {browserAgents.length > 1 && (
+            <div className="flex shrink-0 gap-1 text-[11px]">
+              {browserAgents.map((a) => (
+                <button key={a.id} onClick={() => setDockFor(a.id)}
+                  className={cn("rounded-md border px-2 py-0.5", a.id === dockAgent.id ? "border-brand/60 bg-brand/10 text-ink" : "border-line text-ink-3 hover:text-ink-2")}>
+                  {a.name}{a.id === builderId ? " · Builder" : " · Reviewer"}
+                </button>
+              ))}
+            </div>
+          )}
+          <BrowserDock agent={dockAgent} onClose={() => setDockFor(null)} />
+        </div>
+      )}
+      </div>
     </AppShell>
   );
 }
@@ -226,16 +269,22 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
  * afterwards — the first is permanent and follows the agent everywhere, the
  * second ends with the session. They are shown apart for that reason.
  */
-function Given({ role, who, agent, grant, skills, servers }: {
+function Given({ role, who, agent, attached, grant, skills, servers }: {
   role: string;
   who: string;
   agent?: AgentView;
+  /** what the turn actually attached, when the session recorded it */
+  attached?: string[];
   grant?: { tools: string[]; servers: string[] } | null;
   skills: string[];
   servers: Record<string, string>;
 }) {
   const label = (id: string) => TOOL_CATALOG.find((t) => t.id === id)?.label ?? id;
-  const own = (agent?.toolPermissions ?? []).filter((t) => !(grant?.tools ?? []).includes(t));
+  // the permanent set is what the agent carries; the attached set is what this
+  // session actually gave it. A Reviewer holds more than it is handed.
+  const base = attached ?? agent?.toolPermissions ?? [];
+  const own = base.filter((t) => !(grant?.tools ?? []).includes(t));
+  const withheld = attached ? (agent?.toolPermissions ?? []).filter((t) => !attached.includes(t)) : [];
   const granted = grant?.tools ?? [];
   const grantedServers = grant?.servers ?? [];
   return (
@@ -249,9 +298,14 @@ function Given({ role, who, agent, grant, skills, servers }: {
           ? skills.map((n) => <Chip key={n} tone="#6d7cff">{n}</Chip>)
           : <span className="text-ink-3">none selected</span>}
       </Line>
-      <Line k="Its own permissions">
+      <Line k="Could reach this session">
         {own.length ? own.map((t) => <Chip key={t} tone="#aab2c5">{label(t)}</Chip>) : <span className="text-ink-3">none</span>}
       </Line>
+      {withheld.length > 0 && (
+        <Line k="Held but not attached">
+          {withheld.map((t) => <Chip key={t} tone="#6f7890">{label(t)}</Chip>)}
+        </Line>
+      )}
       <Line k="Granted for this session">
         {granted.length || grantedServers.length ? (
           <>

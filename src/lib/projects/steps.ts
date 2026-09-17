@@ -17,7 +17,23 @@ import type { ActivityEvent } from "@/lib/activity";
 
 const MAX_STEPS = 300;
 const STEP_TEXT = 2_000;
+/**
+ * An orchestration call carries the decision itself — the plan, the session
+ * decomposition, the recovery. Cutting one at 2KB loses the thing a reader
+ * came for, so those keep far more.
+ */
+const DECISION_TEXT = 20_000;
 const STEP_BUDGET = 400_000;
+
+/** Cut, and say so: silent truncation is what destroys an audit trail. */
+function clip(text: string | undefined, max: number): string | undefined {
+  if (text === undefined) return undefined;
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}\n… [truncated by Nexora: ${text.length.toLocaleString()} characters total]`;
+}
+
+/** The Director's own engine tools: these are decisions, not chatter. */
+const isDecision = (e: ActivityEvent) => e.kind === "tool" && e.meta === "director";
 
 /**
  * Drop the narration that is already the reply.
@@ -40,8 +56,8 @@ export function dropEchoedReply(steps: ActivityEvent[], reply: string): Activity
 export function keepSteps(events: ActivityEvent[], budget = STEP_BUDGET): ActivityEvent[] {
   const trimmed = (events.length > MAX_STEPS ? events.slice(-MAX_STEPS) : events).map((e) => ({
     ...e,
-    detail: e.detail?.slice(0, STEP_TEXT),
-    output: e.output?.slice(0, STEP_TEXT),
+    detail: clip(e.detail, isDecision(e) ? DECISION_TEXT : STEP_TEXT),
+    output: clip(e.output, isDecision(e) ? DECISION_TEXT : STEP_TEXT),
     // a screenshot is served from disk; the rest of the browser record is small
     browser: e.browser ? { ...e.browser, console: e.browser.console?.slice(0, 20) } : undefined,
   }));

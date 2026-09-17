@@ -8,7 +8,7 @@
 
 import { asActor, recentActivity, turnEmitter } from "@/lib/activity";
 import { dropEchoedReply, keepSteps } from "./steps";
-import { effectivePermissions } from "./grants";
+import { turnCapabilities } from "./capabilities";
 import { readDb } from "@/lib/store/db";
 import { agentRuntimeType, buildSystemPrompt, runAgentTurn } from "@/lib/runtime";
 import { TurnStopped } from "@/lib/runtime/types";
@@ -40,7 +40,7 @@ import {
 } from "./store";
 import type { Finding, SessionRecord } from "./types";
 import { getPrompt } from "@/lib/prompts";
-import { skillBlock, skillReminder, skillServers } from "@/lib/skills/deliver";
+import { skillBlock, skillReminder } from "@/lib/skills/deliver";
 
 void _unused;
 
@@ -110,12 +110,11 @@ function actorFor(agentId: string, role: string, sessionKey: string) {
   return { agentId, name: agent?.name ?? agentId.slice(0, 8), role, sessionKey };
 }
 
-function agentPrompt(agentId: string, roleText: string, granted?: string[]): string {
+/** The prompt describes exactly the capabilities the turn is given — no more. */
+function agentPrompt(agentId: string, roleText: string, caps?: { permissions: string[] }): string {
   const agent = readDb().agents.find((a) => a.id === agentId);
   if (!agent) return roleText;
-  // the rules an agent is told about itself must match what it can actually
-  // reach this turn, or a granted browser arrives with no browser rule attached
-  const forTurn = granted?.length ? { ...agent, toolPermissions: effectivePermissions(agent.toolPermissions, { tools: granted, servers: [], grantedAt: "", grantedBy: "" }) } : agent;
+  const forTurn = caps ? { ...agent, toolPermissions: caps.permissions } : agent;
   return `${roleText}\n\n# Your identity\n${buildSystemPrompt(forTurn)}`;
 }
 
@@ -263,7 +262,14 @@ async function buildAndReview(a: {
   const { project, session, builderId, cwd, timeoutMs, emit } = a;
   const projectId = project!.id;
   const key = session.key;
-  const builderSystem = agentPrompt(builderId, getPrompt("project-builder-system"), session.grants?.tools);
+  const builderAgent = readDb().agents.find((x) => x.id === builderId);
+  const reviewerAgent = readDb().agents.find((x) => x.id === project!.reviewerAgentId);
+  // tools and prompt decided together, so the agent is never told it holds
+  // something the turn does not actually attach
+  const builderCaps = builderAgent ? turnCapabilities(builderAgent, "builder", session.grants?.tools ?? []) : { servers: [], permissions: [] };
+  const reviewerCaps = reviewerAgent ? turnCapabilities(reviewerAgent, "reviewer") : { servers: [], permissions: [] };
+  patchSession(projectId, key, { capabilities: { builder: builderCaps.permissions, reviewer: reviewerCaps.permissions } });
+  const builderSystem = agentPrompt(builderId, `${getPrompt("project-builder-system")}\n\n${getPrompt("project-evidence-rule")}`, builderCaps);
   // registered immediately, not only once something spawns: a session on the
   // API runtime has no child process to kill, and must still be stoppable
   running.set(session.id, () => {});
@@ -290,7 +296,7 @@ async function buildAndReview(a: {
       scopeId,
       systemPrompt: builderSystem,
       message,
-      servers: skillServers(),
+      servers: builderCaps.servers,
       grantedPermissions: session.grants?.tools,
       grantedServers: session.grants?.servers,
       sessionId: session.builderSessionId ?? undefined,
@@ -333,7 +339,7 @@ async function buildAndReview(a: {
       const r = await runAgentTurn({
         agentId: project!.reviewerAgentId,
         scopeId: `session:${session.id}:review:${round}`,
-        systemPrompt: agentPrompt(project!.reviewerAgentId, getPrompt("project-reviewer-role-line")),
+        systemPrompt: agentPrompt(project!.reviewerAgentId, getPrompt("project-reviewer-role-line"), reviewerCaps),
         message: withSkills(
           reviewPrompt({ originalRequest: session.originalRequest, subject, round, previous: round === 2 ? previous : undefined }),
           // every review round is a fresh conversation of its own, so the
@@ -344,7 +350,7 @@ async function buildAndReview(a: {
         toolProfile: "reader",
         freshPrompt: true,
         includeGrantedMcp: false,
-        servers: skillServers(),
+        servers: reviewerCaps.servers,
         emit: asActor(emit, actorFor(project!.reviewerAgentId, "Reviewer", key), channel),
         timeoutMs: Math.min(remaining(), 20 * 60_000),
         onSpawn,
@@ -388,7 +394,7 @@ async function buildAndReview(a: {
         cwdOverride: cwd,
         toolProfile: "builder",
         freshPrompt: true,
-        servers: skillServers(),
+        servers: builderCaps.servers,
         grantedPermissions: session.grants?.tools,
         grantedServers: session.grants?.servers,
         emit: builderEmit,
@@ -416,10 +422,13 @@ async function buildAndReview(a: {
   if (wasSessionStopped(session.id)) return { status: "paused", summary: answer, verdict };
 
   // ---- checkpoint
-  const hash = await checkpoint(cwd, session.originalRequest);
-  if (hash) {
-    addActivity(projectId, "session", `${key} checkpoint ${hash}`);
-    emit.event({ kind: "file", title: `checkpoint ${hash}`, meta: "git", status: "done" });
+  const cp = await checkpoint(cwd, `${key} ${session.name}`);
+  if (cp) {
+    // name what the agent never staged itself: those are the files that can
+    // become deliverables without anyone deciding they should
+    const note = cp.swept.length ? `swept in unstaged: ${cp.swept.join(", ")}` : undefined;
+    addActivity(projectId, "session", `${key} checkpoint ${cp.hash}`, note);
+    emit.event({ kind: "file", title: `checkpoint ${cp.hash}`, meta: "git", detail: note, status: "done" });
   }
   return { status: "completed", summary: answer, verdict };
 }

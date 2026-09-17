@@ -142,13 +142,13 @@ export const BROWSER_TOOLS: BrowserToolDef[] = [
     name: "present_browser",
     description:
       "Show the owner what is in YOUR browser right now, and optionally hand them the controls. Use it whenever a step needs a human in the page: a CAPTCHA or human check, a login or one-time code you cannot complete, a passkey prompt, an unexpected page, a choice only the owner can make, or something you want them to look at.\n" +
-      "mode \"view\": the Browser Dock opens on their Agent page and you keep working.\n" +
+      "mode \"view\": the Browser Dock opens where they are watching and you keep working. Call it again with mode \"done\" once the thing you wanted seen has passed, so their dock does not sit open on nothing.\n" +
       "mode \"interactive\": the owner takes control of this same browser session (same tabs, cookies and page). STOP touching the browser and END YOUR TURN — you are resumed automatically when they hand control back, and you should then call browser_snapshot to see what changed.\n" +
       "This is not a capability or credential request: nothing is missing from Nexora, you just need the human in the page. Say precisely what you need in `reason` — it is the only thing the owner sees.",
     inputSchema: {
       type: "object",
       properties: {
-        mode: { type: "string", enum: ["view", "interactive"], description: "view = they watch, you keep control; interactive = they drive" },
+        mode: { type: "string", enum: ["view", "interactive", "done"], description: "view = they watch, you keep control; interactive = they drive; done = close the view you opened, when there is nothing left to look at" },
         reason: { type: "string", description: "what the owner should look at or do, e.g. \"Solve the CAPTCHA on the Google signup form, then return control\"" },
       },
       required: ["reason"],

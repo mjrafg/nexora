@@ -83,7 +83,26 @@ export async function runBrowserTool(name: string, args: Record<string, unknown>
 async function presentBrowser(args: Record<string, unknown>, ctx: ToolCallContext): Promise<InternalToolResult> {
   const reason = String(args.reason ?? "").trim();
   if (!reason) return { ok: false, text: "reason is required: tell the owner exactly what to look at or do." };
-  const mode = String(args.mode ?? "view").toLowerCase() === "interactive" ? "INTERACTIVE" : "VIEW";
+  const asked = String(args.mode ?? "view").toLowerCase();
+  // "done" is the other half of "view": an agent that pulled the owner in for a
+  // look should be able to say when there is nothing left to look at, instead
+  // of leaving the dock open on their screen until they close it themselves.
+  if (asked === "done") {
+    const { openHandoffFor, closeHandoff } = await import("./handoff");
+    const open = openHandoffFor(ctx.agentId);
+    if (!open) return { ok: true, text: "Nothing was being shown to the owner." };
+    if (open.mode === "INTERACTIVE") {
+      return { ok: false, text: "The owner has the controls of this browser. Wait for them to hand it back — you are resumed automatically." };
+    }
+    await closeHandoff(open.id, "RETURNED", reason);
+    ctx.emit.event({
+      kind: "browser", meta: "Browser", status: "done",
+      title: `Stopped showing the browser to the owner: ${reason.slice(0, 120)}`,
+      browser: { action: "present", session: safeKey(agentBrowserKey(ctx.agentId)) },
+    });
+    return { ok: true, text: "The owner is no longer being asked to look; the dock closes on its own." };
+  }
+  const mode = asked === "interactive" ? "INTERACTIVE" : "VIEW";
   try {
     const { createHandoff } = await import("./handoff");
     const h = createHandoff({ agentId: ctx.agentId, mode, reason, executionScopeId: ctx.scopeId });

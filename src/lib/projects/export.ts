@@ -110,7 +110,13 @@ function stepToMarkdown(e: ActivityEvent): string[] {
   if (e.browser?.action) lines.push(`- Browser action: ${e.browser.action}${e.browser.ref ? ` (${e.browser.ref})` : ""}`);
   if (e.guard) lines.push(`- Guard: ${e.guard.outcome}${e.guard.class ? ` · ${e.guard.class}` : ""}`);
   if (e.detail) lines.push("", "Input:", "", "```", e.detail, "```");
-  if (e.output) lines.push("", "Output:", "", "```", e.output, "```");
+  if (e.output) {
+    // Claude Code writes oversize tool results to its own disk and hands back a
+    // host-local path. Nexora never received those bytes and cannot embed them;
+    // saying so is more useful than a reference that resolves nowhere.
+    const external = /<persisted-output>|tool-results\//.test(e.output);
+    lines.push("", external ? "Output (held by the runtime outside Nexora — the preview is all Nexora received):" : "Output:", "", "```", e.output, "```");
+  }
   lines.push("", "</details>", "");
   return lines;
 }
@@ -126,10 +132,17 @@ function sessionToMarkdown(s: SessionRecord, builderName: string, reviewerName: 
   out.push(`- **Started:** ${time(s.startedAt)} · **Ended:** ${time(s.endedAt)}`);
   if (s.tokens) out.push(`- **Model turns:** ${s.tokens.turns} · ${s.tokens.input.toLocaleString()} in / ${s.tokens.output.toLocaleString()} out`);
   out.push(`- **Review:** ${s.lastVerdict ?? "not reviewed"} · ${s.reviewsConsumed}/2 rounds${s.finalRepairDone ? " · final repair applied" : ""}`);
+  if (s.capabilities) {
+    out.push(`- **Builder could reach:** ${s.capabilities.builder.join(", ") || "(nothing beyond its runtime)"}`);
+    out.push(`- **Reviewer could reach:** ${s.capabilities.reviewer.join(", ") || "(nothing beyond its runtime)"}`);
+  }
   if (s.grants?.tools.length) out.push(`- **Granted for this session:** ${s.grants.tools.join(", ")} — by ${s.grants.grantedBy}, for this session only`);
   if (s.grants?.servers.length) out.push(`- **Granted tool servers:** ${s.grants.servers.length}`);
-  if (s.skills?.skillIds.length) out.push(`- **Builder skills:** ${s.skills.skillIds.join(", ")} (library ${s.skills.revision.slice(0, 7)})`);
-  if (s.reviewerSkills?.skillIds.length) out.push(`- **Reviewer skills:** ${s.reviewerSkills.skillIds.join(", ")}`);
+  // the audit question is not "which skills" but "who chose them, from which
+  // revision, for which role" — answerable from the export alone
+  const sel = (label: string, x: SessionRecord["skills"]) =>
+    x?.skillIds.length ? `- **${label}:** ${x.skillIds.join(", ")} · chosen by ${x.chosenBy} · library revision \`${x.revision}\` · ${time(x.chosenAt)}` : null;
+  for (const line of [sel("Builder skills", s.skills), sel("Reviewer skills", s.reviewerSkills)]) if (line) out.push(line);
   if (s.dependsOn.length) out.push(`- **Depends on:** ${s.dependsOn.join(", ")}`);
   out.push("");
   out.push("**Brief given to the Builder**", "", "```", s.prompt, "```", "");

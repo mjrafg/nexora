@@ -25,6 +25,7 @@ Available now:
 {{catalog}}
 
 How to use them:
+- The phase beside each skill says where it usually earns its keep. It is guidance, not a rule: give a Reviewer the UI skill if it is judging a UI. Nothing stops you, and nothing will drop the choice.
 - Choose from the WORK, not from who is doing it. A session that builds a page wants the UI skill; a session chasing a broken build wants the debugging one; a session doing neither wants none. Two is usually plenty and none is a perfectly good answer.
 - When you plan sessions, pass the ids in "skills" for the Builder and in "reviewer_skills" for the Reviewer of that session. They are different jobs and usually want different guidance.
 - To read one yourself before deciding, call read_skill. list_skills shows the catalog again at any time.

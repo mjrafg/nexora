@@ -160,14 +160,38 @@ registerPrompt({
   version: 1,
   required: true,
   usedBy: ["Project Builder"],
-  placeholders: ["integration_branch", "session_branches", "instructions"],
+  placeholders: ["integration_branch", "topology", "instructions"],
   defaultContent: [
   "This is a milestone INTEGRATION session. You are on the project integration branch `{{integration_branch}}`.",
-  "The milestone's work lives on these session branches: {{session_branches}}.",
-  "Merge them into `{{integration_branch}}` in a sensible order, resolve any conflicts honestly (never discard either side silently), and run the validations described below. Do NOT merge into or modify any branch other than `{{integration_branch}}`. Never amend, rebase, or rewrite commits that are already on `{{integration_branch}}` — add new commits instead. If a conflict cannot be resolved safely, stop and report it precisely instead of guessing.",
+  "{{topology}}",
+  "Do NOT merge into or modify any branch other than `{{integration_branch}}`. Never amend, rebase, or rewrite commits that are already on `{{integration_branch}}` — add new commits instead. If something cannot be resolved safely, stop and report it precisely instead of guessing.",
   "",
   "{{instructions}}",
 ].join("\n"),
+});
+
+registerPrompt({
+  id: "project-integration-merge",
+  name: "Integration — sessions worked on their own branches",
+  description: "The topology line for a milestone whose sessions were isolated: their branches exist and must be merged.",
+  category: "project",
+  version: 1,
+  required: true,
+  usedBy: ["Project Builder"],
+  placeholders: ["integration_branch", "session_branches"],
+  defaultContent: "The milestone's work is on these session branches: {{session_branches}}. Merge them into `{{integration_branch}}` in a sensible order and resolve any conflicts honestly (never discard either side silently), then run the validations below.",
+});
+
+registerPrompt({
+  id: "project-integration-in-place",
+  name: "Integration — sessions worked on the integration branch",
+  description: "The topology line for a milestone whose sessions were not isolated: the work is already here and there is nothing to merge.",
+  category: "project",
+  version: 1,
+  required: true,
+  usedBy: ["Project Builder"],
+  placeholders: ["integration_branch"],
+  defaultContent: "This milestone's sessions were NOT isolated: they committed straight onto `{{integration_branch}}`, so their work is already here and there is no session branch to merge. Do not look for one and do not invent one — its absence is correct. Your job is to validate what is already on this branch against the checks below, and to fix anything genuinely wrong.",
 });
 registerPrompt({
   id: "project-builder-system",
@@ -298,6 +322,26 @@ registerPrompt({
   usedBy: ["Project Reviewer"],
   placeholders: ["review_round", "max_review_rounds"],
   defaultContent: "# Round\n{{review_round}} of maximum {{max_review_rounds}}.",
+});
+registerPrompt({
+  id: "project-evidence-rule",
+  name: "Claims must not exceed evidence",
+  description: "The honesty rule given to Builders and Reviewers: name how something was checked, and report what could not be checked instead of upgrading a static reading into a verification.",
+  category: "engineering",
+  version: 1,
+  required: true,
+  usedBy: ["Project Builder", "Project Reviewer"],
+  defaultContent: [
+  "# Claims must not exceed evidence",
+  "When you report that something works, say how you know. One short clause is enough — \"read the source\", \"ran the tests\", \"opened it in the browser\".",
+  "Reading code proves what the code says, not what the running program does:",
+  "- A `:focus` rule in CSS proves a focus style is written. It does not prove a focus ring was visible on screen.",
+  "- A 200 from curl proves the file is served. It does not prove the interface works when a person uses it.",
+  "- `localStorage.setItem` in the source proves persistence was implemented. It does not prove data survived a real page refresh.",
+  "- Reading a media query proves a breakpoint exists. It does not prove the layout holds at that width.",
+  "If an acceptance criterion needs evidence you cannot produce — a browser you were not given, a device you do not have, a service you cannot reach — report that criterion as UNVERIFIED and say what is missing. An honest UNVERIFIED is a useful result; a verification you did not perform is a false one, and the next person acts on it.",
+  "Never describe a check you did not run. Do not write that you tested at mobile and desktop widths, navigated by keyboard, watched the console, or confirmed persistence across a refresh unless you actually did those things.",
+].join("\n"),
 });
 registerPrompt({
   id: "project-reviewer-output-format",

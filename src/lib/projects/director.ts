@@ -15,7 +15,7 @@ import { readDb } from "@/lib/store/db";
 import { agentRuntimeType, buildSystemPrompt, runAgentTurn } from "@/lib/runtime";
 import type { ExtraMcpServer } from "@/lib/runtime/types";
 import type { AllowedTool, ToolCallRecord } from "@/lib/mcp/types";
-import { deliver as gitDeliver, ensureIntegrationBranch, git, isAncestor, removeWorktree } from "./git";
+import { checkpointOnlyFiles, deliver as gitDeliver, ensureIntegrationBranch, git, isAncestor, removeWorktree } from "./git";
 import { MAX_PLAN_REVIEW_ROUNDS, render } from "./prompts";
 import { parseVerdict } from "./review";
 import { launchSession, stopAllSessions } from "./session";
@@ -80,7 +80,7 @@ const DIRECTOR_TOOLS: { name: string; op: string; description: string; inputSche
   { name: "recover_session", op: "recover_session", description: "Decide how to recover a failed/timed-out session (independently reviewed).", inputSchema: { type: "object", properties: { key: { type: "string" }, action: { type: "string", enum: ["continue", "restart", "abandon", "wait"] }, reasoning: { type: "string" }, new_prompt: { type: "string" }, extra_minutes: { type: "number" } }, required: ["key", "action", "reasoning"] } },
   { name: "integrate_milestone", op: "integrate_milestone", description: "Start the milestone's integration session on the integration branch.", inputSchema: { type: "object", properties: { milestone: { type: "string" }, instructions: { type: "string" }, timeout_minutes: { type: "number" } }, required: ["milestone", "instructions"] } },
   { name: "complete_milestone", op: "complete_milestone", description: "Mark a milestone complete once its work is merged.", inputSchema: { type: "object", properties: { milestone: { type: "string" }, summary: { type: "string" } }, required: ["milestone", "summary"] } },
-  { name: "project_deliver", op: "deliver", description: "Fast-forward the base branch to the integration branch.", inputSchema: { type: "object", properties: {} } },
+  { name: "project_deliver", op: "deliver", description: "Fast-forward the base branch to the integration branch. If files are present that no agent committed, delivery stops and names them; pass confirm_extra_files to ship them anyway.", inputSchema: { type: "object", properties: { confirm_extra_files: { type: "boolean", description: "Ship files that only the engine\u2019s checkpoint committed, after judging that they belong in the delivery." } } } },
   { name: "complete_project", op: "complete_project", description: "Mark the project complete after delivery.", inputSchema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] } },
   { name: "project_need_user", op: "need_user", description: "Pause for an owner decision; ask the question in your reply.", inputSchema: { type: "object", properties: { question: { type: "string" } }, required: ["question"] } },
 ];
@@ -233,7 +233,10 @@ async function reviewArtifact(projectId: string, prompt: string, round: number):
       agentId: project.reviewerAgentId,
       scopeId: `project:${projectId}:review:${round}`,
       systemPrompt: getPrompt("project-artifact-reviewer-system"),
-      message: prompt,
+      // the same contract the session Reviewer answers under: one parser, one
+      // format. Without it these reviews answered in free prose and a
+      // substantive PASS was filed as "unstructured output".
+      message: `${prompt}\n\n${getPrompt("project-reviewer-output-format")}`,
       cwdOverride: project.rootPath,
       toolProfile: "reader",
       includeGrantedMcp: false,
@@ -423,6 +426,13 @@ export async function handleDirectorTool(projectId: string, name: string, args: 
             const rt = agentRuntimeType(s.agentId);
             if (!rt) return { ok: false, error: `Session ${s.key}: unknown agent_id ${s.agentId}.` };
             if (rt === "api") return { ok: false, error: `Session ${s.key}: agent ${s.agentId} runs on the API runtime and cannot build; pick a Claude Code or Codex agent.` };
+            // the engine promises every session an independent Reviewer; it
+            // cannot keep that promise if the Reviewer built the thing
+            const proj = getProject(projectId);
+            if (proj && s.agentId === proj.reviewerAgentId) {
+              const who = readDb().agents.find((a) => a.id === proj.reviewerAgentId)?.name ?? "That agent";
+              return { ok: false, error: `Session ${s.key}: ${who} is this project's Reviewer and cannot also build the work it will review. Pick a different agent, or leave agent_id unset to use the project's Builder.` };
+            }
           }
         }
         const msKey = String(args.milestone ?? "");
@@ -504,8 +514,14 @@ export async function handleDirectorTool(projectId: string, name: string, args: 
         const busy = dirBusyWithin(projectId, project.rootPath);
         if (busy) return { ok: false, error: `Session ${busy.key} is working in the project directory — integrate after it finishes.` };
         const { integration } = await ensureIntegrationBranch(project.rootPath, projectId);
+        // the engine created the topology, so the engine states it — an
+        // integration Builder must never have to guess whether a session
+        // branch exists, and must not be told to merge one that does not
         const branches = ms.sessions.filter((s) => s.branch && s.status === "completed").map((s) => s.branch as string);
-        planSessions(projectId, msKey, [{ key: intKey, name: `${ms.name} integration`, purpose: `Integrate and validate milestone ${msKey}`, prompt: render(getPrompt("project-integration-wrapper"), { instructions: String(args.instructions ?? ""), integration_branch: integration, session_branches: branches.length ? branches.join(", ") : "(work is already on the integration branch)" }), dependsOn: [], isolated: false }]);
+        const topology = branches.length
+          ? render(getPrompt("project-integration-merge"), { integration_branch: integration, session_branches: branches.join(", ") })
+          : render(getPrompt("project-integration-in-place"), { integration_branch: integration });
+        planSessions(projectId, msKey, [{ key: intKey, name: `${ms.name} integration`, purpose: `Integrate and validate milestone ${msKey}`, prompt: render(getPrompt("project-integration-wrapper"), { instructions: String(args.instructions ?? ""), integration_branch: integration, topology }), dependsOn: [], isolated: false }]);
         patchMilestone(projectId, msKey, { status: "integrating" });
         await launchSession(projectId, intKey, { timeoutMin: args.timeout_minutes ? Number(args.timeout_minutes) : undefined, observe });
         addActivity(projectId, "integration", `${msKey} integration session started`);
@@ -536,8 +552,29 @@ export async function handleDirectorTool(projectId: string, name: string, args: 
         if (!p.baseBranch) return { ok: false, error: "No base branch was recorded for this project — deliver via a session that merges the integration branch into the intended branch, then complete the project." };
         const busy = dirBusyWithin(projectId, p.rootPath);
         if (busy) return { ok: false, error: `Session ${busy.key} is working in the project directory — deliver after it finishes.` };
+        /*
+         * Anything on the branch that no agent ever committed itself.
+         *
+         * A session that could not test in a browser once wrote itself
+         * MANUAL_TEST_INSTRUCTIONS.md, never committed it, and a checkpoint
+         * swept it into the delivery. Rather than guess at filenames, ask git
+         * which files exist only because the engine committed them, and put
+         * the question to the Director before it ships them.
+         */
+        const swept = await checkpointOnlyFiles(p.rootPath, p.integrationBranch);
+        if (swept.length && !args.confirm_extra_files) {
+          return {
+            ok: false,
+            error: [
+              `These files are on ${p.integrationBranch} but no agent ever committed them — the engine's checkpoint swept them in from the working tree:`,
+              ...swept.map((f) => `- ${f}`),
+              "",
+              "If they are part of what this project set out to deliver, call deliver again with confirm_extra_files: true. If they are scratch left over from a session (notes to self, manual test instructions, throwaway scripts), remove them in a short session first and then deliver.",
+            ].join("\n"),
+          };
+        }
         const r = await gitDeliver(p.rootPath, p.integrationBranch, p.baseBranch);
-        if (r.ok) addActivity(projectId, "delivery", r.message);
+        if (r.ok) addActivity(projectId, "delivery", r.message, swept.length ? `delivered with engine-checkpointed files the Director confirmed: ${swept.join(", ")}` : undefined);
         return r.ok ? { ok: true, text: r.message } : { ok: false, error: r.message };
       }
 

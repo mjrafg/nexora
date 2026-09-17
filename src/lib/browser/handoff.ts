@@ -69,6 +69,11 @@ function syncWaiting(h: BrowserHandoff): void {
   else clearAgentWaiting(h.agentId, h.id);
 }
 
+/** The agent's own open handoff, whatever its mode. */
+export function openHandoffFor(agentId: string): BrowserHandoff | null {
+  return readDb().browserHandoffs.find((h) => h.agentId === agentId && h.status === "OPEN") ?? null;
+}
+
 export function patchHandoff(id: string, patch: Partial<BrowserHandoff>): BrowserHandoff {
   return updateDb((d) => {
     const h = d.browserHandoffs.find((x) => x.id === id);

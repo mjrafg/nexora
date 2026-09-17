@@ -111,6 +111,16 @@ export type SessionRecord = {
    * the session: the agent keeps nothing when it ends.
    */
   grants?: SessionGrant | null;
+  /**
+   * What each role could actually reach on this session's turns.
+   *
+   * Not the agent's permanent permissions: the set the engine attached and
+   * described, after the Reviewer's narrowing and the Director's grant. This
+   * is the record that answers "was it told it had something it could not
+   * call?" — the question that had no answer when a Builder was promised a
+   * browser its turn never received.
+   */
+  capabilities?: { builder: string[]; reviewer: string[] } | null;
   /** skills the Director chose for this session's Builder, and for its Reviewer */
   skills?: import("@/lib/skills/types").SkillSelection | null;
   reviewerSkills?: import("@/lib/skills/types").SkillSelection | null;
