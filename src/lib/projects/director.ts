@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { recentActivity, turnEmitter } from "@/lib/activity";
-import { keepSteps } from "./steps";
+import { dropEchoedReply, keepSteps } from "./steps";
 import { readDb } from "@/lib/store/db";
 import { agentRuntimeType, buildSystemPrompt, runAgentTurn } from "@/lib/runtime";
 import type { ExtraMcpServer } from "@/lib/runtime/types";
@@ -206,7 +206,7 @@ async function runDirectorTurn(projectId: string, message: string, kind: "user" 
     });
     if (result.sessionId) patchProject(projectId, { directorSessions: { ...getProject(projectId)!.directorSessions, [rt]: result.sessionId } });
     // the Director's own steps ride with its reply, the way a chat keeps them
-    const activity = keepSteps(recentActivity(projectChannel(projectId), turnStart).filter((e) => e.turnId === emit.turnId), 150_000);
+    const activity = keepSteps(dropEchoedReply(recentActivity(projectChannel(projectId), turnStart).filter((e) => e.turnId === emit.turnId), result.text ?? ""), 150_000);
     addMessage({ projectId, role: "assistant", content: result.text || "(no reply)", usage: result.usage, activity, toolCalls: result.toolCalls?.map((t) => ({ tool: t.tool, ok: t.ok, summary: (t.ok ? t.result : t.error ?? "").slice(0, 200) })) });
   } catch (err) {
     const text = err instanceof Error ? err.message : String(err);

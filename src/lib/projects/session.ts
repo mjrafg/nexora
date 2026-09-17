@@ -7,7 +7,7 @@
    ------------------------------------------------------------------ */
 
 import { asActor, recentActivity, turnEmitter } from "@/lib/activity";
-import { keepSteps } from "./steps";
+import { dropEchoedReply, keepSteps } from "./steps";
 import { readDb } from "@/lib/store/db";
 import { agentRuntimeType, buildSystemPrompt, runAgentTurn } from "@/lib/runtime";
 import { TurnStopped } from "@/lib/runtime/types";
@@ -188,7 +188,8 @@ async function runAndMonitor(projectId: string, key: string, builderId: string, 
   // carry only the turn id. Both belong in the session's record.
   const mine = recentActivity(projectChannel(projectId), runStarted)
     .filter((e) => e.actor?.sessionKey === key || (!e.actor && e.turnId === `session:${key}`));
-  const steps = keepSteps([...before, ...mine]);
+  // the session shows its result in its own panel; the narration need not end by repeating it
+  const steps = keepSteps([...before, ...dropEchoedReply(mine, outcome.summary)]);
 
   const fresh = getProject(projectId);
   const pausing = fresh && ["PAUSING", "PAUSED"].includes(fresh.state);

@@ -244,6 +244,11 @@ function ProjectBubble({ m }: { m: ProjectMessage }) {
   return (
     <div className={cn("flex", mine && "justify-end")}>
       <div className={cn("min-w-0", mine ? "max-w-[78%]" : "max-w-[92%]")}>
+        {/* what the Director did to arrive at this reply, above the reply it
+            produced — the same order the work happened in */}
+        {!mine && m.activity && m.activity.length > 0 && (
+          <div className="mb-1.5"><ActivityFeed events={m.activity} grouped /></div>
+        )}
         <div dir={mine || m.error ? textDirection(m.content) : undefined} className={cn("rounded-2xl px-3 py-2 text-start text-[13px] leading-relaxed", mine ? "whitespace-pre-wrap rounded-tr-sm bg-gradient-to-b from-[#6d7cff] to-[#5563e8] text-white" : m.error ? "whitespace-pre-wrap rounded-tl-sm border border-danger/30 bg-danger/10 text-[#ff8ea3]" : "rounded-tl-sm border border-line bg-white/[0.04] text-ink-2")}>
           {mine || m.error ? m.content : <Markdown>{m.content}</Markdown>}
         </div>

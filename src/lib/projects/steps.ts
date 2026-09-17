@@ -19,6 +19,24 @@ const MAX_STEPS = 300;
 const STEP_TEXT = 2_000;
 const STEP_BUDGET = 400_000;
 
+/**
+ * Drop the narration that is already the reply.
+ *
+ * An agent's last text block is both the end of its narration and the reply
+ * itself. Kept as a step, it renders immediately above the very same words in
+ * the reply bubble — the account of the work reads as if it stuttered.
+ */
+export function dropEchoedReply(steps: ActivityEvent[], reply: string): ActivityEvent[] {
+  const said = reply.trim();
+  if (!said || !steps.length) return steps;
+  const last = steps[steps.length - 1];
+  if (last.kind !== "note") return steps;
+  const note = last.title.trim();
+  // the note is truncated when long, so an echo is a prefix, not an exact match
+  const echo = said.startsWith(note.slice(0, 120)) || note.startsWith(said.slice(0, 120));
+  return echo ? steps.slice(0, -1) : steps;
+}
+
 export function keepSteps(events: ActivityEvent[], budget = STEP_BUDGET): ActivityEvent[] {
   const trimmed = (events.length > MAX_STEPS ? events.slice(-MAX_STEPS) : events).map((e) => ({
     ...e,
