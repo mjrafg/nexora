@@ -515,8 +515,14 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<RuntimeChatRe
     if (extra && extra.tools.some((t) => t.fullName === fullName)) return extra.call(fullName, args);
     return bundle.call(fullName, args);
   };
+  // A project turn is work like any other: register it so the agent shows as
+  // working on the floor and in the header, and so the owner can stop it. This
+  // used to be done only on the chat path, which is why a Builder could run for
+  // twenty minutes while the whole app reported it idle.
+  const live = registerTurn(agent.id, input.scopeId ?? `turn:${input.emit.turnId}`, input.emit.turnId);
+  pokeOffice("turn:started", agent.id);
   try {
-  return await runtime.chat({
+  const result = await runtime.chat({
     agent,
     systemPrompt: input.systemPrompt,
     history: input.history ?? [],
@@ -531,10 +537,21 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<RuntimeChatRe
     extraServers: isCli ? [...(input.extraServers ?? []), ...bundle.extraServers] : undefined,
     silentToolPrefixes: bundle.silentToolPrefixes,
     freshPrompt: input.freshPrompt,
-    onSpawn: input.onSpawn,
+    // keep the caller's own onSpawn working while giving the registry the kill handle
+    onSpawn: (kill) => { live.kill = kill; if (live.stopped) kill(); input.onSpawn?.(kill); },
+    abortSignal: live.controller.signal,
     timeoutMs: input.timeoutMs,
   });
+  if (live.stopped) throw new TurnStopped(0);
+  return result;
+  } catch (err) {
+    // an owner who pressed Stop did not encounter a failure; say so, so the
+    // caller can record it as stopped work rather than broken work
+    if (live.stopped || wasStopped(agent.id, input.emit.turnId)) throw new TurnStopped(0);
+    throw err;
   } finally {
+    releaseTurn(agent.id, input.emit.turnId);
+    pokeOffice("turn:ended", agent.id);
     bundle.release();
   }
 }

@@ -29,6 +29,23 @@ export type BrowserActionMeta = {
 };
 export type ActivityStatus = "running" | "done" | "failed";
 
+/**
+ * Who actually did this, when the channel is not a person.
+ *
+ * Project work is emitted on a project channel so the whole run reads as one
+ * stream — but a stream that cannot say whether the Builder or the Reviewer
+ * ran a command is not an answer to "who is doing what". Every event carried
+ * on a shared channel names its actor.
+ */
+export type ActivityActor = {
+  agentId: string;
+  name: string;
+  /** "Director" | "Builder" | "Reviewer" — the hat, not the job title */
+  role: string;
+  /** the session this belongs to, when it belongs to one */
+  sessionKey?: string;
+};
+
 export type ActivityEvent = {
   id: string;
   agentId: string;
@@ -48,6 +65,8 @@ export type ActivityEvent = {
   browser?: BrowserActionMeta;
   /** side-effect guard verdict for tool events (executed / deduplicated / uncertain…) */
   guard?: GuardInfo;
+  /** set when the channel is shared (a project) rather than one agent's own */
+  actor?: ActivityActor;
   ts: number;
 };
 
@@ -55,6 +74,10 @@ const bus = new EventEmitter();
 bus.setMaxListeners(0);
 
 const RING = 300;
+/** A project channel carries three agents' work for a whole build; one turn's
+ *  worth of history is not enough to open the page on and understand the run. */
+const WIDE_RING = 3_000;
+const ringFor = (channel: string) => (channel.startsWith("project:") ? WIDE_RING : RING);
 const recent = new Map<string, ActivityEvent[]>();
 
 export function subscribeActivity(agentId: string, cb: (ev: ActivityEvent) => void): () => void {
@@ -85,29 +108,46 @@ export function emitActivity(input: Omit<ActivityEvent, "id" | "ts"> & { id?: st
     if (ev.guard === undefined) ev.guard = prev.guard;
     list[existingIdx] = ev;
   } else list.push(ev);
-  while (list.length > RING) list.shift();
+  while (list.length > ringFor(ev.agentId)) list.shift();
   recent.set(ev.agentId, list);
   bus.emit("event", ev);
   return ev.id;
 }
 
 /** A per-turn emitter bound to an agent, with helpers for running→done tools. */
-export function turnEmitter(agentId: string, turnId: string) {
+export function turnEmitter(agentId: string, turnId: string, opts: { actor?: ActivityActor; mirror?: string[] } = {}) {
+  const { actor, mirror = [] } = opts;
+  // the same event, also delivered to the acting agent's own channel, so the
+  // agent's page shows the work it is doing inside a project
+  const fan = (ev: Omit<ActivityEvent, "id" | "ts"> & { id?: string; ts?: number }): string => {
+    const id = emitActivity({ ...ev, ...(actor ? { actor } : {}) });
+    for (const ch of mirror) {
+      if (ch === ev.agentId) continue;
+      emitActivity({ ...ev, id: `${id}@${ch}`, agentId: ch, ...(actor ? { actor } : {}) });
+    }
+    return id;
+  };
   return {
     turnId,
+    actor,
     status(title: string, detail?: string) {
-      emitActivity({ agentId, turnId, kind: "status", title, detail });
+      fan({ agentId, turnId, kind: "status", title, detail });
     },
     start(kind: ActivityKind, title: string, detail?: string, meta?: string): string {
-      return emitActivity({ agentId, turnId, kind, title, detail, meta, status: "running" });
+      return fan({ agentId, turnId, kind, title, detail, meta, status: "running" });
     },
     finish(id: string, kind: ActivityKind, title: string, patch: { detail?: string; output?: string; meta?: string; status: ActivityStatus; guard?: GuardInfo }) {
-      emitActivity({ id, agentId, turnId, kind, title, ...patch });
+      fan({ id, agentId, turnId, kind, title, ...patch });
     },
     event(ev: Omit<ActivityEvent, "id" | "agentId" | "turnId" | "ts"> & { id?: string }) {
-      return emitActivity({ agentId, turnId, ...ev });
+      return fan({ agentId, turnId, ...ev });
     },
   };
+}
+
+/** The same channel and turn, seen as a different person doing a different job. */
+export function asActor(emit: TurnEmitter, actor: ActivityActor, channel: string): TurnEmitter {
+  return turnEmitter(channel, emit.turnId, { actor, mirror: [actor.agentId] });
 }
 
 export type TurnEmitter = ReturnType<typeof turnEmitter>;

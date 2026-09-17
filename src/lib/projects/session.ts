@@ -6,9 +6,10 @@
    one final repair) → checkpoint commit → classify → notify the Director.
    ------------------------------------------------------------------ */
 
-import { turnEmitter } from "@/lib/activity";
+import { asActor, turnEmitter } from "@/lib/activity";
 import { readDb } from "@/lib/store/db";
 import { agentRuntimeType, buildSystemPrompt, runAgentTurn } from "@/lib/runtime";
+import { TurnStopped } from "@/lib/runtime/types";
 import { buildSystemPrompt as _unused } from "@/lib/runtime";
 import {
   changedFiles,
@@ -46,10 +47,23 @@ export const MAX_SESSION_TIMEOUT_MIN = 90;
 
 /** kill handles for running sessions, by session id */
 const running = new Map<string, () => void>();
+/**
+ * Sessions the owner stopped on purpose. Killing the process looks exactly
+ * like a crash from inside the runtime, so the intent has to be recorded
+ * here — otherwise a deliberate stop is filed as a failure and the Director
+ * is asked to recover from something that did not go wrong.
+ */
+const stoppedByOwner = new Set<string>();
+
+/** Was this session stopped by hand, rather than failing? */
+export function wasSessionStopped(sessionId: string): boolean {
+  return stoppedByOwner.has(sessionId);
+}
 
 export function stopSession(sessionId: string): boolean {
   const kill = running.get(sessionId);
   if (!kill) return false;
+  stoppedByOwner.add(sessionId);
   kill();
   return true;
 }
@@ -86,6 +100,12 @@ function countTokens(projectId: string, key: string, usage: { inputTokens?: numb
   patchSession(projectId, key, {
     tokens: { input: prev.input + (usage.inputTokens ?? 0), output: prev.output + (usage.outputTokens ?? 0), turns: prev.turns + 1 },
   });
+}
+
+/** Name the person behind a role, so the timeline can say who ran what. */
+function actorFor(agentId: string, role: string, sessionKey: string) {
+  const agent = readDb().agents.find((a) => a.id === agentId);
+  return { agentId, name: agent?.name ?? agentId.slice(0, 8), role, sessionKey };
 }
 
 function agentPrompt(agentId: string, roleText: string): string {
@@ -138,6 +158,7 @@ export async function launchSession(projectId: string, key: string, opts: { time
     merged = await mergeDependencyBranches(project.rootPath, depBranches);
   }
 
+  stoppedByOwner.delete(session.id);
   patchSession(projectId, key, { cwd, status: "running", startedAt: new Date().toISOString(), endedAt: null, stopReason: null, errorText: null });
   addActivity(projectId, "session", `${key} ${session.name} started · builder: ${readDb().agents.find((a) => a.id === builderId)?.name ?? builderId}${merged.length ? ` · deps merged: ${merged.join(", ")}` : ""}`);
 
@@ -160,7 +181,8 @@ async function runAndMonitor(projectId: string, key: string, builderId: string, 
 
   const fresh = getProject(projectId);
   const pausing = fresh && ["PAUSING", "PAUSED"].includes(fresh.state);
-  const status = pausing && outcome.status !== "completed" ? "paused" : outcome.status;
+  const handStopped = wasSessionStopped(session.id);
+  const status = (pausing || handStopped) && outcome.status !== "completed" ? "paused" : outcome.status;
   patchSession(projectId, key, {
     status: status === "failed" || status === "timeout" ? "needs_attention" : status,
     stopReason: status === "paused" ? (pausing ? "project_pause" : "user_stop") : null,
@@ -168,6 +190,7 @@ async function runAndMonitor(projectId: string, key: string, builderId: string, 
     resultSummary: outcome.summary.slice(0, 1_000) || null,
     errorText: outcome.errorText ?? null,
   });
+  stoppedByOwner.delete(session.id);
   addActivity(
     projectId,
     "session",
@@ -224,6 +247,9 @@ async function buildAndReview(a: {
   const projectId = project!.id;
   const key = session.key;
   const builderSystem = agentPrompt(builderId, getPrompt("project-builder-system"));
+  // registered immediately, not only once something spawns: a session on the
+  // API runtime has no child process to kill, and must still be stoppable
+  running.set(session.id, () => {});
   const onSpawn = (kill: () => void) => running.set(session.id, kill);
   const deadline = Date.now() + timeoutMs;
   const remaining = () => Math.max(60_000, deadline - Date.now());
@@ -232,6 +258,8 @@ async function buildAndReview(a: {
   const before = await snapshot(cwd);
   const scopeId = `session:${session.id}`;
   const brief = a.continuation ? render(getPrompt("project-session-continuation"), { note: a.continuation }) : session.prompt;
+  const channel = projectChannel(projectId);
+  const builderEmit = asActor(emit, actorFor(builderId, "Builder", key), channel);
   const message = withSkills(
     brief,
     conversationContinues(builderId, session.builderSessionId)
@@ -250,17 +278,24 @@ async function buildAndReview(a: {
       cwdOverride: cwd,
       toolProfile: "builder",
       freshPrompt: true,
-      emit,
+      emit: builderEmit,
       timeoutMs: remaining(),
       onSpawn,
     });
   } catch (err) {
+    // the owner stopped this agent: the session is parked, not broken, and the
+    // Director can resume it with its conversation and scope intact
+    if (err instanceof TurnStopped) return { status: "paused", summary: "", verdict: null };
     const text = err instanceof Error ? `${err.message}${(err as { detail?: string }).detail ? ` — ${(err as { detail?: string }).detail}` : ""}` : String(err);
     return { status: /timed out/i.test(text) ? "timeout" : "failed", summary: "", verdict: null, errorText: `Builder call failed: ${text}` };
   }
   if (builderResult.sessionId) patchSession(projectId, key, { builderSessionId: builderResult.sessionId });
   countTokens(projectId, key, builderResult.usage);
   let answer = builderResult.text;
+  // Killing the process only ends the step that was running. A session is a
+  // loop — build, review, repair — so every phase boundary has to ask whether
+  // the owner still wants it to continue, or Stop merely skips to the next phase.
+  if (wasSessionStopped(session.id)) return { status: "paused", summary: answer, verdict: null };
 
   // ---- review loop (ported policy: ≤2 rounds, final repair never re-reviewed)
   let after = await snapshot(cwd);
@@ -270,6 +305,7 @@ async function buildAndReview(a: {
   let previous: Finding[] = session.lastFindings ?? [];
 
   while (subject && consumed < MAX_REVIEW_ROUNDS) {
+    if (wasSessionStopped(session.id)) return { status: "paused", summary: answer, verdict };
     const round = (consumed + 1) as 1 | 2;
     addActivity(projectId, "review", `${key} review round ${round} started`);
     const reviewEv = emit.start("model", `Review round ${round}`, undefined, "Reviewer");
@@ -290,7 +326,7 @@ async function buildAndReview(a: {
         freshPrompt: true,
         includeGrantedMcp: false,
         servers: skillServers(),
-        emit,
+        emit: asActor(emit, actorFor(project!.reviewerAgentId, "Reviewer", key), channel),
         timeoutMs: Math.min(remaining(), 20 * 60_000),
         onSpawn,
       });
@@ -309,6 +345,7 @@ async function buildAndReview(a: {
     emit.finish(reviewEv, "model", `Review round ${round}`, { status: "done", output: reviewText.slice(0, 2000), meta: verdict === "pass" ? "PASS" : `${parsed.items.length} finding${parsed.items.length === 1 ? "" : "s"}` });
     addActivity(projectId, "review", `${key} review round ${round}: ${verdict === "pass" ? "PASS" : `${parsed.items.length} findings`}`, verdict === "pass" ? undefined : findingsAsText(parsed.items));
     if (verdict === "pass") break;
+    if (wasSessionStopped(session.id)) return { status: "paused", summary: answer, verdict };
     previous = parsed.items;
 
     // ---- repair (round 1) or final repair (round 2, never re-reviewed)
@@ -333,14 +370,16 @@ async function buildAndReview(a: {
         toolProfile: "builder",
         freshPrompt: true,
         servers: skillServers(),
-        emit,
+        emit: builderEmit,
         timeoutMs: remaining(),
         onSpawn,
       });
       if (rep.sessionId) patchSession(projectId, key, { builderSessionId: rep.sessionId });
       countTokens(projectId, key, rep.usage);
       answer = rep.text || answer;
+      if (wasSessionStopped(session.id)) return { status: "paused", summary: answer, verdict };
     } catch (err) {
+      if (err instanceof TurnStopped) return { status: "paused", summary: answer, verdict };
       const text = err instanceof Error ? err.message : String(err);
       return { status: "failed", summary: answer, verdict, errorText: `${isFinal ? "Final repair" : "Builder repair"} call failed: ${text}` };
     }
@@ -352,6 +391,8 @@ async function buildAndReview(a: {
     after = await snapshot(cwd);
     subject = subjectFor(await changedFiles(cwd, before, after), answer) ?? subject;
   }
+
+  if (wasSessionStopped(session.id)) return { status: "paused", summary: answer, verdict };
 
   // ---- checkpoint
   const hash = await checkpoint(cwd, session.originalRequest);

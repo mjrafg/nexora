@@ -40,19 +40,92 @@ const BROWSER_ICONS: Record<string, typeof Globe> = {
   reset: Power, kill: Power, crash: Power,
 };
 
+/** Each hat gets a colour, so a mixed project stream stays readable. */
+const ROLE_TINT: Record<string, string> = { Director: "#6d7cff", Builder: "#3dd68c", Reviewer: "#f5b942" };
+
 function duration(ms?: number): string {
   if (ms === undefined) return "";
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
+/* ---------------------------------------------------------------- grouping
+
+   A build can emit thousands of steps. Read one by one they are noise; the
+   shape of the work only appears when a run of the same kind of step collapses
+   into one line — "Read 14 files", "Ran 6 commands" — that opens on demand.
+   Only consecutive steps of the same kind, by the same actor, in the same turn
+   are ever folded together, so nothing is grouped that did not happen together.
+*/
+
+const GROUPABLE = new Set<ActivityKind>(["command", "file", "tool", "browser"]);
+/** What a folded run of each kind is called. */
+const GROUP_VERB: Partial<Record<ActivityKind, string>> = { command: "command", file: "file change", tool: "tool call", browser: "browser step" };
+
+type Item =
+  | { key: string; kind: "one"; e: ActivityEvent }
+  | { key: string; kind: "many"; of: ActivityKind; events: ActivityEvent[] };
+
+function group(events: ActivityEvent[]): Item[] {
+  const items: Item[] = [];
+  for (const e of events) {
+    const last = items[items.length - 1];
+    const sameRun =
+      last?.kind === "many" &&
+      last.of === e.kind &&
+      last.events[0].turnId === e.turnId &&
+      last.events[0].actor?.agentId === e.actor?.agentId;
+    if (GROUPABLE.has(e.kind) && sameRun) { (last as Extract<Item, { kind: "many" }>).events.push(e); continue; }
+    if (GROUPABLE.has(e.kind)) { items.push({ key: e.id, kind: "many", of: e.kind, events: [e] }); continue; }
+    items.push({ key: e.id, kind: "one", e });
+  }
+  return items;
+}
+
 /** A live (or persisted) log of what the agent did this turn. */
-export function ActivityFeed({ events, live }: { events: ActivityEvent[]; live?: boolean }) {
+export function ActivityFeed({ events, live, grouped }: { events: ActivityEvent[]; live?: boolean; grouped?: boolean }) {
   if (events.length === 0) return null;
+  const items = grouped ? group(events) : events.map((e) => ({ key: e.id, kind: "one" as const, e }));
   return (
     <div className="overflow-hidden rounded-lg border border-line bg-black/20">
-      {events.map((e, i) => (
-        <ActivityRow key={e.id} e={e} live={live} first={i === 0} />
-      ))}
+      {items.map((item, i) =>
+        item.kind === "many" && item.events.length > 1
+          ? <GroupRow key={item.key} of={item.of} events={item.events} live={live} first={i === 0} />
+          : <ActivityRow key={item.key} e={item.kind === "many" ? item.events[0] : item.e} live={live} first={i === 0} />
+      )}
+    </div>
+  );
+}
+
+/** One line standing for several consecutive steps of the same kind. */
+function GroupRow({ of, events, live, first }: { of: ActivityKind; events: ActivityEvent[]; live?: boolean; first: boolean }) {
+  const [open, setOpen] = useState(false);
+  const Icon = ICONS[of] ?? Activity;
+  const failed = events.filter((e) => e.status === "failed").length;
+  const running = events.some((e) => e.status === "running");
+  const total = events.reduce((n, e) => n + (e.durationMs ?? 0), 0);
+  const noun = GROUP_VERB[of] ?? "step";
+  const actor = events[0].actor;
+  return (
+    <div className={cn(!first && "border-t border-line/70", failed > 0 && "bg-danger/[0.07]")}>
+      <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] hover:bg-white/[0.04]">
+        {open ? <ChevronDown className="h-3 w-3 shrink-0 text-ink-3" /> : <ChevronRight className="h-3 w-3 shrink-0 text-ink-3" />}
+        <Icon className="h-3.5 w-3.5 shrink-0 text-ink-3" strokeWidth={1.8} />
+        {actor && (
+          <span className="shrink-0 rounded-md border px-1.5 py-px text-[10px] font-medium"
+            style={{ borderColor: `${ROLE_TINT[actor.role] ?? "#aab2c5"}55`, color: ROLE_TINT[actor.role] ?? "#aab2c5" }}>
+            {actor.name}
+          </span>
+        )}
+        <span className="truncate text-ink">{events.length} {noun}{events.length === 1 ? "" : "s"}</span>
+        {failed > 0 && <span className="shrink-0 text-[11px] text-[#ff7d95]">{failed} failed</span>}
+        {running && live && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-ceo pulse-ring" />}
+        <span className="ml-auto shrink-0 num text-[11px] text-ink-3">{duration(total)}</span>
+      </button>
+      {open && (
+        <div className="border-t border-line/70 bg-black/20">
+          {events.map((e, i) => <ActivityRow key={e.id} e={e} live={live} first={i === 0} />)}
+        </div>
+      )}
     </div>
   );
 }
@@ -85,6 +158,15 @@ function ActivityRow({ e, live, first }: { e: ActivityEvent; live?: boolean; fir
           <span className="w-3 shrink-0" />
         )}
         <Icon className={cn("h-3.5 w-3.5 shrink-0", failed ? "text-[#ff7d95]" : e.kind === "model" ? "text-ceo" : e.kind === "browser" ? "text-support" : "text-ink-3")} strokeWidth={1.8} />
+        {e.actor && (
+          <span
+            className="shrink-0 rounded-md border px-1.5 py-px text-[10px] font-medium"
+            style={{ borderColor: `${ROLE_TINT[e.actor.role] ?? "#aab2c5"}55`, color: ROLE_TINT[e.actor.role] ?? "#aab2c5" }}
+            title={`${e.actor.name} — ${e.actor.role}${e.actor.sessionKey ? ` · ${e.actor.sessionKey}` : ""}`}
+          >
+            {e.actor.name}
+          </span>
+        )}
         {label && <span className="shrink-0 text-ink-2">{label} ·</span>}
         <span className={cn("truncate", e.kind === "model" || e.kind === "browser" ? "text-ink" : "font-mono text-[11.5px] text-ink")}>{e.title}</span>
         {dedup && <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-operations/40 bg-operations/10 px-1.5 py-px text-[10px] text-operations"><ShieldCheck className="h-3 w-3" /> Already completed — duplicate prevented</span>}

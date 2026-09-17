@@ -21,7 +21,9 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
         }
       };
       controller.enqueue(enc.encode(": connected\n\n"));
-      for (const ev of recentActivity(channel, Date.now() - 60_000)) send(ev);
+      // replay the whole retained run, not the last minute: opening the page
+      // mid-build should show what has happened, not an empty pane
+      for (const ev of recentActivity(channel)) send(ev);
       unsub = subscribeActivity(channel, send);
       hb = setInterval(() => {
         try {

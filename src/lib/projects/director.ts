@@ -159,7 +159,10 @@ async function runDirectorTurn(projectId: string, message: string, kind: "user" 
   if (!project) return;
   const director = readDb().agents.find((a) => a.id === project.directorAgentId);
   if (!director) return;
-  const emit = turnEmitter(projectChannel(projectId), `director:${randomUUID().slice(0, 8)}`);
+  const emit = turnEmitter(projectChannel(projectId), `director:${randomUUID().slice(0, 8)}`, {
+    actor: { agentId: director.id, name: director.name, role: "Director" },
+    mirror: [director.id],
+  });
   // the catalog is ids and one line each — never bodies; the Director reads a
   // skill with read_skill if it wants to, and hands ids to sessions otherwise.
   // With no skills available the section is absent entirely, leaving the
@@ -212,7 +215,11 @@ async function runDirectorTurn(projectId: string, message: string, kind: "user" 
 
 async function reviewArtifact(projectId: string, prompt: string, round: number): Promise<{ verdict: "pass" | "findings"; findingsText: string } | null> {
   const project = getProject(projectId)!;
-  const emit = turnEmitter(projectChannel(projectId), `review:${round}`);
+  const reviewer = readDb().agents.find((a) => a.id === project.reviewerAgentId);
+  const emit = turnEmitter(projectChannel(projectId), `review:${round}`, {
+    actor: { agentId: project.reviewerAgentId, name: reviewer?.name ?? "Reviewer", role: "Reviewer" },
+    mirror: [project.reviewerAgentId],
+  });
   try {
     const r = await runAgentTurn({
       agentId: project.reviewerAgentId,

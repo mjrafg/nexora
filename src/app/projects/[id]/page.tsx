@@ -1,9 +1,9 @@
 "use client";
 
-import { use, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Pause, Play, Trash2, Loader2, Send, Boxes, Activity as ActivityIcon, ChevronDown, ChevronRight, GitBranch, CheckCircle2, XCircle, Circle, CircleDot, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Pause, Play, Square, Trash2, Loader2, Send, Boxes, Activity as ActivityIcon, ChevronDown, ChevronRight, GitBranch, CheckCircle2, XCircle, Circle, CircleDot, AlertTriangle } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Panel } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
@@ -31,6 +31,9 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
   const [live, setLive] = useState<ActivityEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"milestones" | "activity" | "live">("milestones");
+  // the Director can name a specific Builder per session; that is stored as an
+  // id, and an id is not an answer to "who built this"
+  const [names, setNames] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -49,6 +52,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
 
   useEffect(() => {
     api.project(id).then((r) => { setProject(r.project); setActivity(r.activity); setMessages(r.messages); }).catch((e) => setError(errorText(e)));
+    api.agents().then((r) => setNames(Object.fromEntries(r.agents.map((a) => [a.id, a.name])))).catch(() => {});
   }, [id]);
 
   // Live stream: project-level status changes trigger a reload; tool/model events feed the live tab.
@@ -154,7 +158,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
           </div>
           {tab === "milestones" && (
             project.milestones.length === 0 ? <p className="text-[12px] text-ink-3">No plan yet — the Director is working on it.</p> :
-            <div className="space-y-2">{project.milestones.map((m) => <MilestoneCard key={m.id} m={m} />)}</div>
+            <div className="space-y-2">{project.milestones.map((m) => <MilestoneCard key={m.id} m={m} project={project} names={names} onStopped={load} />)}</div>
           )}
           {tab === "activity" && (
             <div className="max-h-[560px] space-y-1 overflow-y-auto">
@@ -162,14 +166,58 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
               {activity.length === 0 && <p className="text-[12px] text-ink-3">Nothing yet.</p>}
             </div>
           )}
-          {tab === "live" && (
-            <div className="max-h-[560px] overflow-y-auto">
-              {live.length ? <ActivityFeed events={live} live /> : <p className="text-[12px] text-ink-3">Tool calls and commands appear here as agents work.</p>}
-            </div>
-          )}
+          {tab === "live" && <LiveTab events={live} />}
         </Panel>
       </div>
     </AppShell>
+  );
+}
+
+
+/** Who is mid-step right now, from the live stream's own running events. */
+function WorkingNow({ events }: { events: ActivityEvent[] }) {
+  const busy = new Map<string, { name: string; role: string; sessionKey?: string; title: string }>();
+  for (const e of events) {
+    if (!e.actor) continue;
+    if (e.status === "running") busy.set(e.actor.agentId, { ...e.actor, title: e.title });
+    else if (busy.get(e.actor.agentId)?.title === e.title) busy.delete(e.actor.agentId);
+  }
+  const rows = [...busy.values()];
+  if (!rows.length) return <p className="mb-2 text-[11.5px] text-ink-3">Nobody is mid-step right now.</p>;
+  return (
+    <div className="mb-2 flex flex-wrap gap-1.5">
+      {rows.map((r) => (
+        <span key={`${r.name}-${r.title}`} className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-line bg-white/[0.03] px-2 py-1 text-[11.5px]">
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-ceo" />
+          <span className="shrink-0 text-ink">{r.name}</span>
+          <span className="shrink-0 text-ink-3">{r.role}{r.sessionKey ? ` · ${r.sessionKey}` : ""}</span>
+          <span className="truncate font-mono text-[10.5px] text-ink-2">{r.title}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** The run as it happens: who is working, then everything they did, newest last. */
+function LiveTab({ events }: { events: ActivityEvent[] }) {
+  const [who, setWho] = useState<string>("all");
+  const actors = [...new Set(events.map((e) => e.actor?.name).filter(Boolean) as string[])];
+  const shown = who === "all" ? events : events.filter((e) => e.actor?.name === who);
+  return (
+    <div className="max-h-[560px] overflow-y-auto">
+      <WorkingNow events={events} />
+      {actors.length > 1 && (
+        <div className="mb-2 flex flex-wrap gap-1 text-[11px]">
+          {["all", ...actors].map((a) => (
+            <button key={a} onClick={() => setWho(a)}
+              className={cn("rounded-md border px-2 py-0.5 capitalize", who === a ? "border-brand/60 bg-brand/10 text-ink" : "border-line text-ink-3 hover:text-ink-2")}>
+              {a}
+            </button>
+          ))}
+        </div>
+      )}
+      {shown.length ? <ActivityFeed events={shown} live grouped /> : <p className="text-[12px] text-ink-3">Tool calls and commands appear here as agents work.</p>}
+    </div>
   );
 }
 
@@ -208,7 +256,7 @@ function ProjectBubble({ m }: { m: ProjectMessage }) {
   );
 }
 
-function MilestoneCard({ m }: { m: MilestoneView }) {
+function MilestoneCard({ m, project, names, onStopped }: { m: MilestoneView; project: ProjectView; names: Record<string, string>; onStopped: () => void }) {
   const [open, setOpen] = useState(true);
   const Icon = m.status === "completed" ? CheckCircle2 : m.status === "planned" ? Circle : CircleDot;
   return (
@@ -223,15 +271,26 @@ function MilestoneCard({ m }: { m: MilestoneView }) {
         <div className="border-t border-line px-2.5 py-2">
           <p className="text-[11.5px] text-ink-2">{m.goal}</p>
           {m.acceptance && <p className="mt-1 text-[10.5px] text-ink-3"><span className="text-ink-2">Acceptance:</span> {m.acceptance}</p>}
-          {m.sessions.length > 0 && <div className="mt-2 space-y-1">{m.sessions.map((s) => <SessionRow key={s.id} s={s} />)}</div>}
+          {m.sessions.length > 0 && <div className="mt-2 space-y-1">{m.sessions.map((s) => <SessionRow key={s.id} s={s} project={project} names={names} onStopped={onStopped} />)}</div>}
         </div>
       )}
     </div>
   );
 }
 
-function SessionRow({ s }: { s: SessionRecord }) {
+function SessionRow({ s, project, names, onStopped }: { s: SessionRecord; project: ProjectView; names: Record<string, string>; onStopped: () => void }) {
   const [open, setOpen] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
+
+  async function stop(e: React.MouseEvent) {
+    e.stopPropagation();
+    setStopping(true);
+    setStopError(null);
+    try { await api.stopProjectSession(project.id, s.key); onStopped(); }
+    catch (err) { setStopError(errorText(err)); }
+    finally { setStopping(false); }
+  }
   const color = SESSION_COLOR[s.status] ?? "#6f7890";
   return (
     <div className="rounded-md border border-line/70 bg-black/20">
@@ -245,6 +304,16 @@ function SessionRow({ s }: { s: SessionRecord }) {
           <span style={{ color }}>{s.status.replace("_", " ")}</span>
         </span>
       </button>
+      {s.status === "running" && (
+        <div className="flex items-center gap-2 border-t border-line/70 px-2 py-1">
+          <button type="button" onClick={stop} disabled={stopping}
+            className="inline-flex items-center gap-1 rounded-md border border-line px-1.5 py-0.5 text-[10.5px] text-ink-3 hover:border-danger/40 hover:text-[#ff8ea3] disabled:opacity-50">
+            {stopping ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3" />} Stop this session
+          </button>
+          <span className="text-[10px] text-ink-3">work on the branch is kept; the Director can resume it</span>
+          {stopError && <span className="text-[10px] text-[#ff8ea3]">{stopError}</span>}
+        </div>
+      )}
       {open && (
         <div className="space-y-1.5 border-t border-line/70 px-2 py-1.5 text-[11px]">
           <div className="text-ink-2">{s.purpose}</div>
@@ -256,10 +325,54 @@ function SessionRow({ s }: { s: SessionRecord }) {
             </div>
           )}
           {s.errorText && <div className="text-[#ff8ea3]">{s.errorText}</div>}
+          <Facts s={s} project={project} names={names} />
           <details><summary className="cursor-pointer text-ink-3">Builder prompt</summary><pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap text-[10.5px] text-ink-2">{s.prompt}</pre></details>
         </div>
       )}
     </div>
+  );
+}
+
+
+/** A clock that ticks only while something is actually running. */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    // first tick on the next frame, not during the effect body, so the clock
+    // never causes a cascading render of its own
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    const first = setTimeout(() => setNow(Date.now()), 0);
+    return () => { clearInterval(t); clearTimeout(first); };
+  }, [active]);
+  return now;
+}
+
+/** The run's own record: who, where, how long, what it cost, what it was given. */
+function Facts({ s, project, names }: { s: SessionRecord; project: ProjectView; names: Record<string, string> }) {
+  const started = s.startedAt ? new Date(s.startedAt).getTime() : 0;
+  const ended = s.endedAt ? new Date(s.endedAt).getTime() : 0;
+  const now = useNow(!!started && !ended);
+  const elapsed = started ? Math.round(((ended || now || started) - started) / 1000) : 0;
+  const rows: [string, React.ReactNode][] = [];
+  rows.push(["Builder", s.agentId ? names[s.agentId] ?? s.agentId : project.builderAgentName]);
+  rows.push(["Reviewer", project.reviewerAgentName]);
+  if (s.branch) rows.push(["Branch", <span key="b" className="font-mono text-[10.5px]">{s.branch}</span>]);
+  if (s.cwd) rows.push(["Worktree", <span key="w" className="font-mono text-[10.5px] break-all">{s.cwd}</span>]);
+  if (elapsed) rows.push(["Elapsed", `${elapsed < 90 ? `${elapsed}s` : `${Math.round(elapsed / 60)}m`}${s.endedAt ? "" : " and counting"}`]);
+  if (s.tokens) rows.push(["Model turns", `${s.tokens.turns} · ${s.tokens.input.toLocaleString()} in / ${s.tokens.output.toLocaleString()} out`]);
+  if (s.skills?.skillIds.length) rows.push(["Builder skills", s.skills.skillIds.join(", ")]);
+  if (s.reviewerSkills?.skillIds.length) rows.push(["Reviewer skills", s.reviewerSkills.skillIds.join(", ")]);
+  if (s.builderSessionId) rows.push(["Runtime session", <span key="r" className="font-mono text-[10.5px]">{s.builderSessionId.slice(0, 12)}…</span>]);
+  return (
+    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-[10.5px]">
+      {rows.map(([k, v], i) => (
+        <Fragment key={i}>
+          <dt className="text-ink-3">{k}</dt>
+          <dd className="min-w-0 truncate text-ink-2">{v}</dd>
+        </Fragment>
+      ))}
+    </dl>
   );
 }
 

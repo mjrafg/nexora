@@ -84,6 +84,8 @@ export const api = {
     call<{ preview: ImportPreview; suggested: string[] }>("/api/prompts/import", { method: "POST", body: JSON.stringify({ file }) }),
   applyPromptImport: (file: unknown, apply: string[]) =>
     call<{ preview: ImportPreview; result: { applied: string[]; skipped: { id: string; reason: string }[] } }>("/api/prompts/import", { method: "POST", body: JSON.stringify({ file, apply }) }),
+  stopProjectSession: (projectId: string, key: string) =>
+    call<{ ok: true }>(`/api/projects/${projectId}/sessions/${encodeURIComponent(key)}/stop`, { method: "POST" }),
   skills: () => call<{ skills: SkillView[]; source: SkillSourceMeta; counts: SkillCounts; deliveries: SkillDeliveryShown[] }>("/api/skills"),
   skill: (id: string) => call<{ skill: SkillView; delivered: string; license: string }>(`/api/skills/${id}`),
   setSkillEnabled: (id: string, enabled: boolean) => call<{ skill: SkillView }>(`/api/skills/${id}`, { method: "POST", body: JSON.stringify({ enabled }) }),
