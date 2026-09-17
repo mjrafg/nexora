@@ -8,6 +8,7 @@
 
 import { asActor, recentActivity, turnEmitter } from "@/lib/activity";
 import { dropEchoedReply, keepSteps } from "./steps";
+import { effectivePermissions } from "./grants";
 import { readDb } from "@/lib/store/db";
 import { agentRuntimeType, buildSystemPrompt, runAgentTurn } from "@/lib/runtime";
 import { TurnStopped } from "@/lib/runtime/types";
@@ -109,10 +110,13 @@ function actorFor(agentId: string, role: string, sessionKey: string) {
   return { agentId, name: agent?.name ?? agentId.slice(0, 8), role, sessionKey };
 }
 
-function agentPrompt(agentId: string, roleText: string): string {
+function agentPrompt(agentId: string, roleText: string, granted?: string[]): string {
   const agent = readDb().agents.find((a) => a.id === agentId);
   if (!agent) return roleText;
-  return `${roleText}\n\n# Your identity\n${buildSystemPrompt(agent)}`;
+  // the rules an agent is told about itself must match what it can actually
+  // reach this turn, or a granted browser arrives with no browser rule attached
+  const forTurn = granted?.length ? { ...agent, toolPermissions: effectivePermissions(agent.toolPermissions, { tools: granted, servers: [], grantedAt: "", grantedBy: "" }) } : agent;
+  return `${roleText}\n\n# Your identity\n${buildSystemPrompt(forTurn)}`;
 }
 
 /**
@@ -259,7 +263,7 @@ async function buildAndReview(a: {
   const { project, session, builderId, cwd, timeoutMs, emit } = a;
   const projectId = project!.id;
   const key = session.key;
-  const builderSystem = agentPrompt(builderId, getPrompt("project-builder-system"));
+  const builderSystem = agentPrompt(builderId, getPrompt("project-builder-system"), session.grants?.tools);
   // registered immediately, not only once something spawns: a session on the
   // API runtime has no child process to kill, and must still be stoppable
   running.set(session.id, () => {});
@@ -287,6 +291,8 @@ async function buildAndReview(a: {
       systemPrompt: builderSystem,
       message,
       servers: skillServers(),
+      grantedPermissions: session.grants?.tools,
+      grantedServers: session.grants?.servers,
       sessionId: session.builderSessionId ?? undefined,
       cwdOverride: cwd,
       toolProfile: "builder",
@@ -383,6 +389,8 @@ async function buildAndReview(a: {
         toolProfile: "builder",
         freshPrompt: true,
         servers: skillServers(),
+        grantedPermissions: session.grants?.tools,
+        grantedServers: session.grants?.servers,
         emit: builderEmit,
         timeoutMs: remaining(),
         onSpawn,

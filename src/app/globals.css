@@ -100,20 +100,6 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-@keyframes pulse-ring {
-  0% { transform: scale(0.9); opacity: 0.7; }
-  100% { transform: scale(1.6); opacity: 0; }
-}
-
-.pulse-ring::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  border-radius: 9999px;
-  border: 1px solid currentColor;
-  animation: pulse-ring 1.8s ease-out infinite;
-}
-
 @keyframes shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
@@ -131,5 +117,4 @@ body {
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
-  .pulse-ring::after { display: none; }
 }

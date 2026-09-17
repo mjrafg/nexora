@@ -160,6 +160,8 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
               <Fact k="Started" v={session.startedAt ? new Date(session.startedAt).toLocaleString() : "—"} />
               {elapsed > 0 && <Fact k="Elapsed" v={`${elapsed < 90 ? `${elapsed}s` : `${Math.round(elapsed / 60)}m`}${session.endedAt ? "" : " and counting"}`} />}
               {session.tokens && <Fact k="Model turns" v={`${session.tokens.turns} · ${session.tokens.input.toLocaleString()} in / ${session.tokens.output.toLocaleString()} out`} />}
+              {session.grants?.tools.length ? <Fact k="Granted for this session" v={<span className="text-[#f5b942]">{session.grants.tools.join(", ")}</span>} /> : null}
+              {session.grants?.servers.length ? <Fact k="Granted tool servers" v={<span className="text-[#f5b942]">{session.grants.servers.length}</span>} /> : null}
               {session.skills?.skillIds.length ? <Fact k="Builder skills" v={session.skills.skillIds.join(", ")} /> : null}
               {session.reviewerSkills?.skillIds.length ? <Fact k="Reviewer skills" v={session.reviewerSkills.skillIds.join(", ")} /> : null}
               {session.dependsOn.length ? <Fact k="Depends on" v={session.dependsOn.join(", ")} /> : null}

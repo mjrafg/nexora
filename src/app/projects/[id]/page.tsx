@@ -77,6 +77,16 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
     return () => { es.close(); if (timer) clearTimeout(timer); };
   }, [id, load]);
 
+  // Status events fire when a session changes, but a Director turn starts
+  // without one — so "is anything happening?" would go stale for minutes.
+  // A slow poll keeps that answer honest while the project can still move.
+  const settled = !project || ["COMPLETED", "FAILED", "PAUSED"].includes(project.state);
+  useEffect(() => {
+    if (settled) return;
+    const t = setInterval(load, 15_000);
+    return () => clearInterval(t);
+  }, [settled, load]);
+
   useEffect(() => { bottomRef.current?.scrollIntoView({ block: "end" }); }, [messages.length]);
 
   async function send() {
@@ -115,6 +125,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
           <h1 className="flex items-center gap-2 text-[20px] font-semibold tracking-tight">
             <Boxes className="h-5 w-5 text-brand" /> {project.title}
             <Badge color={STATE_COLOR[project.state]} dot>{project.state}</Badge>
+            <ActivityNow project={project} />
           </h1>
           <p className="truncate font-mono text-[11px] text-ink-3">{project.rootPath}{project.integrationBranch ? ` · ${project.integrationBranch}` : ""}</p>
         </div>
@@ -224,6 +235,34 @@ function LiveTab({ events }: { events: ActivityEvent[] }) {
       )}
       {shown.length ? <ActivityFeed events={shown} live grouped /> : <p className="text-[12px] text-ink-3">Tool calls and commands appear here as agents work.</p>}
     </div>
+  );
+}
+
+/**
+ * Whether anything is happening, right now.
+ *
+ * The state badge answers a different question: RUNNING means "not paused and
+ * not finished", and stays RUNNING through every gap between turns. Asking
+ * "is it stopped?" of that badge cannot be answered, so this says which agents
+ * are actually holding a turn and which sessions are executing.
+ */
+function ActivityNow({ project }: { project: ProjectView }) {
+  const { busy, runningKeys } = project;
+  if (!busy.length && !runningKeys.length) {
+    const settled = project.state === "COMPLETED" || project.state === "FAILED";
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-line px-2 py-0.5 text-[10.5px] font-normal text-ink-3">
+        <span className="h-1.5 w-1.5 rounded-full bg-ink-3" />
+        {settled ? "nothing left to run" : project.state === "PAUSED" ? "stopped" : "idle — nothing running"}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-brand/40 bg-brand/[0.08] px-2 py-0.5 text-[10.5px] font-normal text-ink-2">
+      <Loader2 className="h-3 w-3 animate-spin text-ceo" />
+      {busy.length ? busy.map((b) => `${b.name} (${b.role})`).join(", ") : `${runningKeys.length} session${runningKeys.length === 1 ? "" : "s"}`}
+      {runningKeys.length > 0 && <span className="font-mono text-ink-3">{runningKeys.join(", ")}</span>}
+    </span>
   );
 }
 
@@ -393,6 +432,7 @@ function Facts({ s, project, names }: { s: SessionRecord; project: ProjectView; 
   if (s.cwd) rows.push(["Worktree", <span key="w" className="font-mono text-[10.5px] break-all">{s.cwd}</span>]);
   if (elapsed) rows.push(["Elapsed", `${elapsed < 90 ? `${elapsed}s` : `${Math.round(elapsed / 60)}m`}${s.endedAt ? "" : " and counting"}`]);
   if (s.tokens) rows.push(["Model turns", `${s.tokens.turns} · ${s.tokens.input.toLocaleString()} in / ${s.tokens.output.toLocaleString()} out`]);
+  if (s.grants?.tools.length) rows.push(["Granted for this session", <span key="g" className="text-[#f5b942]">{s.grants.tools.join(", ")}</span>]);
   if (s.skills?.skillIds.length) rows.push(["Builder skills", s.skills.skillIds.join(", ")]);
   if (s.reviewerSkills?.skillIds.length) rows.push(["Reviewer skills", s.reviewerSkills.skillIds.join(", ")]);
   if (s.builderSessionId) rows.push(["Runtime session", <span key="r" className="font-mono text-[10.5px]">{s.builderSessionId.slice(0, 12)}…</span>]);

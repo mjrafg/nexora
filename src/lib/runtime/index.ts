@@ -487,6 +487,14 @@ export type AgentTurnInput = {
   timeoutMs?: number;
   onSpawn?: (kill: () => void) => void;
   freshPrompt?: boolean;
+  /**
+   * Permissions this turn runs with, on top of the agent's own. Used by a
+   * project session the Director gave extra reach for: the widening lasts
+   * exactly as long as the turn, and is never written back onto the agent.
+   */
+  grantedPermissions?: string[];
+  /** MCP servers this turn may reach, beyond the agent's own grants */
+  grantedServers?: string[];
 };
 
 /** Which runtime an agent is on (for callers that need CLI-only behavior). */
@@ -499,8 +507,24 @@ export function agentRuntimeType(agentId: string): RuntimeType | null {
 
 export async function runAgentTurn(input: AgentTurnInput): Promise<RuntimeChatResult> {
   const db = readDb();
-  const agent = db.agents.find((a) => a.id === input.agentId);
-  if (!agent) throw new RuntimeError("Agent not found", input.agentId);
+  const stored = db.agents.find((a) => a.id === input.agentId);
+  if (!stored) throw new RuntimeError("Agent not found", input.agentId);
+  // the agent as it exists for the length of this turn only — nothing here is
+  // ever persisted back, so a grant cannot follow it into other work
+  const agent = input.grantedPermissions?.length || input.grantedServers?.length
+    ? {
+        ...stored,
+        toolPermissions: [...new Set([...stored.toolPermissions, ...(input.grantedPermissions ?? [])])],
+        mcpGrants: [
+          ...(stored.mcpGrants ?? []),
+          ...(input.grantedServers ?? [])
+            .filter((id) => !(stored.mcpGrants ?? []).some((g) => g.serverId === id))
+            // the owner already trusted this server for someone on the project;
+            // the session gets what that trust covers, for this turn
+            .map((serverId) => ({ serverId, enabled: true, tools: "all" as const })),
+        ],
+      }
+    : stored;
   const config = db.runtimeConfigs.find((r) => r.id === agent.runtimeConfigId);
   if (!config) throw new RuntimeError("Runtime config missing for agent", agent.id);
   const resolved = resolveRuntime(config);

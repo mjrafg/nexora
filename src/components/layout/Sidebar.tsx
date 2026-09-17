@@ -109,7 +109,7 @@ export function Sidebar() {
                   <span className="flex-1 text-left">{label}</span>
                   {live && (
                     <span className="flex items-center gap-1 text-[10px] font-medium text-conference">
-                      <span className="relative h-1.5 w-1.5 rounded-full bg-conference pulse-ring" /> LIVE
+                      <span className="h-1.5 w-1.5 rounded-full bg-conference" /> LIVE
                     </span>
                   )}
                   {count !== undefined && (

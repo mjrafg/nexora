@@ -32,6 +32,14 @@ export default function DirectorPage({ params }: { params: Promise<{ id: string 
       .catch((e) => setError(errorText(e)));
   }, [id]);
   useEffect(() => { load(); }, [load]);
+  // a Director turn starts without emitting a status event, so "is it working?"
+  // would go stale between reloads; refresh slowly while the project can move
+  const settled = !project || ["COMPLETED", "FAILED", "PAUSED"].includes(project.state);
+  useEffect(() => {
+    if (settled) return;
+    const t = setInterval(load, 15_000);
+    return () => clearInterval(t);
+  }, [settled, load]);
 
   useEffect(() => {
     const es = new EventSource(`/api/projects/${id}/activity`);
@@ -56,11 +64,24 @@ export default function DirectorPage({ params }: { params: Promise<{ id: string 
     return () => { es.close(); if (timer) clearTimeout(timer); };
   }, [id, load]);
 
-  // steps that have arrived since the last reply was written — the turn in flight
+  /*
+   * The turn in flight, if there is one.
+   *
+   * "Every live event not found in a stored reply" was not that: the stream
+   * replays the whole retained run, and a stored reply keeps a trimmed set with
+   * its closing note removed, so leftovers always remained and the page claimed
+   * the Director was working long after it had stopped. Whether it is working
+   * is a fact the server holds, so ask it — and then show only what has arrived
+   * since the last reply was written.
+   */
+  const working = project?.busy.some((b) => b.role === "Director") ?? false;
   const inFlight = useMemo(() => {
-    const kept = new Set((messages.flatMap((m) => m.activity ?? [])).map((e) => e.id));
-    return live.filter((e) => !kept.has(e.id));
-  }, [live, messages]);
+    if (!working) return [];
+    const lastReply = messages.filter((m) => m.role === "assistant").at(-1);
+    const since = lastReply ? new Date(lastReply.createdAt).getTime() : 0;
+    const kept = new Set(messages.flatMap((m) => m.activity ?? []).map((e) => e.id));
+    return live.filter((e) => e.ts > since && !kept.has(e.id));
+  }, [working, live, messages]);
 
   if (error && !project) return <AppShell><div className="glass rounded-2xl p-4 text-[12.5px] text-[#ff8ea3]">{error}</div></AppShell>;
   if (!project) return <AppShell><div className="flex items-center gap-2 text-[12.5px] text-ink-3"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div></AppShell>;
@@ -87,12 +108,14 @@ export default function DirectorPage({ params }: { params: Promise<{ id: string 
       <Panel title="Decisions" subtitle={`${messages.filter((m) => m.role === "assistant").length} replies · ${messages.filter((m) => m.role === "observation").length} engine observations`}>
         <div className="space-y-3">
           {messages.map((m) => <Turn key={m.id} m={m} director={project.directorAgentName} />)}
-          {inFlight.length > 0 && (
+          {working && (
             <div className="rounded-xl border border-brand/30 bg-brand/[0.04] p-2.5">
               <div className="mb-1.5 flex items-center gap-2 text-[11.5px] text-ink-2">
                 <Loader2 className="h-3 w-3 animate-spin text-ceo" /> {project.directorAgentName} is working now
               </div>
-              <ActivityFeed events={inFlight} grouped live />
+              {inFlight.length > 0
+                ? <ActivityFeed events={inFlight} grouped live />
+                : <p className="text-[11.5px] text-ink-3">No step has been reported yet for this turn.</p>}
             </div>
           )}
           {messages.length === 0 && <p className="text-[12px] text-ink-3">Nothing yet.</p>}

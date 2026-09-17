@@ -120,7 +120,7 @@ export default function CapabilitiesPage() {
                   <div className="text-[11.5px] text-ink-3">{ov.role}</div>
                 </div>
                 <div className={cn("flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px]", ov.working ? "border-operations/40 bg-operations/10 text-operations" : "border-line text-ink-3")}>
-                  <span className={cn("h-1.5 w-1.5 rounded-full", ov.working ? "bg-operations pulse-ring" : "bg-ink-3")} /> {ov.working ? "Working" : "Idle"}
+                  <span className={cn("h-1.5 w-1.5 rounded-full", ov.working ? "bg-operations" : "bg-ink-3")} /> {ov.working ? "Working" : "Idle"}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-px bg-line md:grid-cols-4">

@@ -81,6 +81,15 @@ export type MilestoneRecord = {
   dependsOn: string[];
 };
 
+export type SessionGrant = {
+  /** native permission ids, already checked against the owner's ceiling */
+  tools: string[];
+  /** MCP server ids someone on this project was already trusted with */
+  servers: string[];
+  grantedAt: string;
+  grantedBy: string;
+};
+
 export type SessionRecord = {
   id: string;
   projectId: string;
@@ -97,6 +106,11 @@ export type SessionRecord = {
   cwd: string | null;
   /** Builder agent chosen by the Director (null = project default) */
   agentId: string | null;
+  /**
+   * Permissions and tool servers the Director gave this session. Scoped to
+   * the session: the agent keeps nothing when it ends.
+   */
+  grants?: SessionGrant | null;
   /** skills the Director chose for this session's Builder, and for its Reviewer */
   skills?: import("@/lib/skills/types").SkillSelection | null;
   reviewerSkills?: import("@/lib/skills/types").SkillSelection | null;
@@ -160,9 +174,13 @@ export type ProjectView = ProjectRecord & {
   builderAgentName: string;
   reviewerAgentName: string;
   counts: { sessions: number; running: number; completed: number };
+  /** agents holding a turn at this instant — what "is it actually working?" means */
+  busy: { name: string; role: string }[];
+  /** the sessions currently executing */
+  runningKeys: string[];
 };
 
 /* ---- director tool inputs ---- */
 
 export type MilestoneInput = { key: string; name: string; goal: string; acceptance: string; dependsOn: string[] };
-export type SessionInput = { key: string; name: string; purpose: string; prompt: string; dependsOn: string[]; isolated: boolean; agentId?: string | null; skills?: string[]; reviewerSkills?: string[] };
+export type SessionInput = { key: string; name: string; purpose: string; prompt: string; dependsOn: string[]; isolated: boolean; agentId?: string | null; skills?: string[]; reviewerSkills?: string[]; grantTools?: string[]; grantServers?: string[] };

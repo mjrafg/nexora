@@ -6,6 +6,7 @@
 
 import { newId, now, readDb, updateDb } from "@/lib/store/db";
 import { emitActivity } from "@/lib/activity";
+import { isAgentBusy } from "@/lib/runtime/stop";
 import { MAX_REVIEW_ROUNDS } from "./prompts";
 import type {
   ActivityKind,
@@ -24,6 +25,7 @@ import type {
 } from "./types";
 import { sessionBranchName } from "./git";
 import { LIBRARY_REVISION, isEnabled } from "@/lib/skills/library";
+import { resolveGrant } from "./grants";
 import type { SkillSelection } from "@/lib/skills/types";
 
 export const projectChannel = (projectId: string) => `project:${projectId}`;
@@ -65,13 +67,28 @@ export function toProjectView(p: ProjectRecord): ProjectView {
   const name = (id: string) => db.agents.find((a) => a.id === id)?.name ?? "(missing agent)";
   const milestones = milestonesOf(p.id);
   const all = milestones.flatMap((m) => m.sessions);
+  const running = all.filter((s) => s.status === "running");
+  // RUNNING is the project's state — "not paused, not finished" — and it stays
+  // RUNNING while the Director sits between turns. Whether anything is
+  // happening THIS SECOND is a different question, and the only honest answer
+  // is which of its agents is actually holding a turn right now.
+  const roles: [string, string][] = [[p.directorAgentId, "Director"], [p.builderAgentId, "Builder"], [p.reviewerAgentId, "Reviewer"]];
+  const seen = new Set<string>();
+  const busy: { name: string; role: string }[] = [];
+  for (const [id, role] of [...roles, ...running.map((s) => [s.agentId ?? p.builderAgentId, "Builder"] as [string, string])]) {
+    if (seen.has(id) || !isAgentBusy(id)) continue;
+    seen.add(id);
+    busy.push({ name: name(id), role });
+  }
   return {
     ...p,
     milestones,
     directorAgentName: name(p.directorAgentId),
     builderAgentName: name(p.builderAgentId),
     reviewerAgentName: name(p.reviewerAgentId),
-    counts: { sessions: all.length, running: all.filter((s) => s.status === "running").length, completed: all.filter((s) => s.status === "completed").length },
+    counts: { sessions: all.length, running: running.length, completed: all.filter((s) => s.status === "completed").length },
+    busy,
+    runningKeys: running.map((s) => s.key),
   };
 }
 
@@ -212,6 +229,8 @@ function selection(ids: string[] | undefined): SkillSelection | null {
 export function planSessions(projectId: string, milestoneKey: string, sessions: SessionInput[]): MilestoneView {
   const ms = milestoneByKey(projectId, milestoneKey);
   if (!ms) throw new Error(`Unknown milestone: ${milestoneKey}`);
+  const project = getProject(projectId);
+  if (!project) throw new Error("Project not found.");
   const all = readDb().projectSessions.filter((s) => s.projectId === projectId);
   const merged = [
     ...all.filter((s) => !sessions.some((n) => n.key === s.key)).map((s) => ({ key: s.key, dependsOn: s.dependsOn })),
@@ -225,7 +244,7 @@ export function planSessions(projectId: string, milestoneKey: string, sessions: 
         if (old.status !== "planned" && old.status !== "abandoned") {
           throw new Error(`Session ${s.key} is ${old.status} and its definition can no longer be replaced — use recover_session instead.`);
         }
-        Object.assign(old, { name: s.name, purpose: s.purpose, prompt: s.prompt, dependsOn: s.dependsOn, status: "planned", agentId: s.agentId ?? null, originalRequest: s.prompt, skills: selection(s.skills), reviewerSkills: selection(s.reviewerSkills) });
+        Object.assign(old, { name: s.name, purpose: s.purpose, prompt: s.prompt, dependsOn: s.dependsOn, status: "planned", agentId: s.agentId ?? null, originalRequest: s.prompt, skills: selection(s.skills), reviewerSkills: selection(s.reviewerSkills), grants: resolveGrant(project, s.grantTools, s.grantServers).grant });
       } else {
         const rec: SessionRecord = {
           id: newId(),
@@ -240,6 +259,7 @@ export function planSessions(projectId: string, milestoneKey: string, sessions: 
           branch: s.isolated ? sessionBranchName(projectId, s.key) : null,
           cwd: null,
           agentId: s.agentId ?? null,
+          grants: resolveGrant(project, s.grantTools, s.grantServers).grant,
           skills: selection(s.skills),
           reviewerSkills: selection(s.reviewerSkills),
           builderSessionId: null,

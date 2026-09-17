@@ -126,6 +126,8 @@ function sessionToMarkdown(s: SessionRecord, builderName: string, reviewerName: 
   out.push(`- **Started:** ${time(s.startedAt)} · **Ended:** ${time(s.endedAt)}`);
   if (s.tokens) out.push(`- **Model turns:** ${s.tokens.turns} · ${s.tokens.input.toLocaleString()} in / ${s.tokens.output.toLocaleString()} out`);
   out.push(`- **Review:** ${s.lastVerdict ?? "not reviewed"} · ${s.reviewsConsumed}/2 rounds${s.finalRepairDone ? " · final repair applied" : ""}`);
+  if (s.grants?.tools.length) out.push(`- **Granted for this session:** ${s.grants.tools.join(", ")} — by ${s.grants.grantedBy}, for this session only`);
+  if (s.grants?.servers.length) out.push(`- **Granted tool servers:** ${s.grants.servers.length}`);
   if (s.skills?.skillIds.length) out.push(`- **Builder skills:** ${s.skills.skillIds.join(", ")} (library ${s.skills.revision.slice(0, 7)})`);
   if (s.reviewerSkills?.skillIds.length) out.push(`- **Reviewer skills:** ${s.reviewerSkills.skillIds.join(", ")}`);
   if (s.dependsOn.length) out.push(`- **Depends on:** ${s.dependsOn.join(", ")}`);

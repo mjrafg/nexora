@@ -46,6 +46,7 @@ import {
 import type { MilestoneInput, PendingRecovery, ProjectRecord, SessionInput } from "./types";
 import { getPrompt, renderPrompt } from "@/lib/prompts";
 import { catalogLines, skillServers } from "@/lib/skills/deliver";
+import { GRANTABLE, resolveGrant } from "./grants";
 import { availableSkills } from "@/lib/skills/library";
 
 /* ---------------------------------------------------------------- internal callback auth */
@@ -73,7 +74,7 @@ export function internalBase(): string {
 const DIRECTOR_TOOLS: { name: string; op: string; description: string; inputSchema: Record<string, unknown> }[] = [
   { name: "project_get_state", op: "get_state", description: "Fetch the live project state.", inputSchema: { type: "object", properties: {} } },
   { name: "project_set_plan", op: "set_plan", description: "Submit or revise the master plan (milestones only).", inputSchema: { type: "object", properties: { title: { type: "string" }, summary: { type: "string" }, milestones: { type: "array", items: { type: "object", properties: { key: { type: "string" }, name: { type: "string" }, goal: { type: "string" }, acceptance: { type: "string" }, depends_on: { type: "array", items: { type: "string" } } }, required: ["key", "name", "goal", "acceptance"] } } }, required: ["milestones", "summary"] } },
-  { name: "plan_milestone_sessions", op: "plan_sessions", description: "Decompose one milestone into self-contained sessions.", inputSchema: { type: "object", properties: { milestone: { type: "string" }, reasoning: { type: "string" }, sessions: { type: "array", items: { type: "object", properties: { key: { type: "string" }, name: { type: "string" }, purpose: { type: "string" }, prompt: { type: "string" }, depends_on: { type: "array", items: { type: "string" } }, isolated: { type: "boolean" }, agent_id: { type: "string" }, skills: { type: "array", items: { type: "string" }, description: "skill_ids from list_skills that this session's Builder should be given — choose from the work, usually none, one or two" }, reviewer_skills: { type: "array", items: { type: "string" }, description: "skill_ids for the independent Reviewer of this session; usually different from the Builder's" } }, required: ["key", "name", "purpose", "prompt"] } } }, required: ["milestone", "sessions", "reasoning"] } },
+  { name: "plan_milestone_sessions", op: "plan_sessions", description: "Decompose one milestone into self-contained sessions.", inputSchema: { type: "object", properties: { milestone: { type: "string" }, reasoning: { type: "string" }, sessions: { type: "array", items: { type: "object", properties: { key: { type: "string" }, name: { type: "string" }, purpose: { type: "string" }, prompt: { type: "string" }, depends_on: { type: "array", items: { type: "string" } }, isolated: { type: "boolean" }, agent_id: { type: "string" }, skills: { type: "array", items: { type: "string" }, description: "skill_ids from list_skills that this session's Builder should be given — choose from the work, usually none, one or two" }, reviewer_skills: { type: "array", items: { type: "string" }, description: "skill_ids for the independent Reviewer of this session; usually different from the Builder's" }, grant_tools: { type: "array", items: { type: "string" }, description: "extra permissions this session's Builder needs, beyond what its agent already has: read_files, write_files, run_commands, web_search, web_fetch, browser, company_profile. Scoped to this session only. Anything else (payments, credentials, writing company data) is refused — those go through the Capability Manager, which asks the owner." }, grant_servers: { type: "array", items: { type: "string" }, description: "tool servers this session may use, by name. Only servers someone on this project has already been given." } }, required: ["key", "name", "purpose", "prompt"] } } }, required: ["milestone", "sessions", "reasoning"] } },
   { name: "start_sessions", op: "start_sessions", description: "Start planned sessions whose dependencies are satisfied.", inputSchema: { type: "object", properties: { keys: { type: "array", items: { type: "string" } }, timeout_minutes: { type: "number" } }, required: ["keys"] } },
   { name: "resume_sessions", op: "resume_sessions", description: "Resume paused/interrupted sessions in their own conversations.", inputSchema: { type: "object", properties: { keys: { type: "array", items: { type: "string" } }, note: { type: "string" } }, required: ["keys"] } },
   { name: "recover_session", op: "recover_session", description: "Decide how to recover a failed/timed-out session (independently reviewed).", inputSchema: { type: "object", properties: { key: { type: "string" }, action: { type: "string", enum: ["continue", "restart", "abandon", "wait"] }, reasoning: { type: "string" }, new_prompt: { type: "string" }, extra_minutes: { type: "number" } }, required: ["key", "action", "reasoning"] } },
@@ -169,12 +170,14 @@ async function runDirectorTurn(projectId: string, message: string, kind: "user" 
   // With no skills available the section is absent entirely, leaving the
   // Director's assembly exactly as it was before skills existed.
   const skillNote = availableSkills().length ? ["", renderPrompt("skills-director-note", { catalog: catalogLines() })] : [];
+  const grantNote = ["", renderPrompt("project-grants-note", { grantable: GRANTABLE.join(", ") })];
   const system = [
     getPrompt("project-director-system"),
     "",
     "# AVAILABLE BUILDER AGENTS (use agent_id when planning sessions)",
     builderCatalog(project),
     ...skillNote,
+    ...grantNote,
     "",
     "# Your identity",
     buildSystemPrompt(director),
@@ -395,6 +398,8 @@ export async function handleDirectorTool(projectId: string, name: string, args: 
           isolated: !!s.isolated,
           agentId: s.agent_id ? String(s.agent_id) : null,
           skills: Array.isArray(s.skills) ? (s.skills as unknown[]).map(String) : [],
+          grantTools: Array.isArray(s.grant_tools) ? (s.grant_tools as unknown[]).map(String) : [],
+          grantServers: Array.isArray(s.grant_servers) ? (s.grant_servers as unknown[]).map(String) : [],
           reviewerSkills: Array.isArray(s.reviewer_skills) ? (s.reviewer_skills as unknown[]).map(String) : [],
         }));
         if (sessions.length === 0) return { ok: false, error: "Provide at least one session." };
@@ -410,10 +415,17 @@ export async function handleDirectorTool(projectId: string, name: string, args: 
         if (!milestoneByKey(projectId, msKey)) return { ok: false, error: `Unknown milestone: ${msKey}` };
         const openDeps = milestoneDepsOpen(projectId, msKey);
         if (openDeps.length) return { ok: false, error: `Milestone ${msKey} cannot be decomposed yet: predecessor${openDeps.length === 1 ? "" : "s"} ${openDeps.join(", ")} not completed. Complete ${openDeps.join(", ")} first (complete_milestone), or revise the plan.` };
+        const project = getProject(projectId)!;
+        // anything above the owner's ceiling is refused per item and said back,
+        // so the Director learns the boundary instead of guessing at it
+        const refusals = sessions.flatMap((x) =>
+          resolveGrant(project, x.grantTools, x.grantServers).refused.map((r) => `${x.key}: ${r.id} — ${r.why}`)
+        );
         const ms = planSessions(projectId, msKey, sessions);
         patchMilestone(projectId, ms.key, { status: "running" });
         addActivity(projectId, "decision", `${ms.key} planned into ${ms.sessions.length} sessions`, String(args.reasoning ?? "").slice(0, 1_500));
-        return { ok: true, text: `Milestone ${ms.key} now has ${ms.sessions.length} sessions. Start the ready ones with start_sessions.` };
+        if (refusals.length) addActivity(projectId, "decision", `${ms.key}: ${refusals.length} grant(s) refused`, refusals.join("\n"));
+        return { ok: true, text: `Milestone ${ms.key} now has ${ms.sessions.length} sessions. Start the ready ones with start_sessions.${refusals.length ? `\n\nNot granted:\n${refusals.map((r) => `- ${r}`).join("\n")}` : ""}` };
       }
 
       case "start_sessions": {
