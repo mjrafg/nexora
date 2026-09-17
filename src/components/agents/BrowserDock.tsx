@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronsRight, Maximize2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { BrowserLiveView } from "./BrowserLiveView";
@@ -22,8 +22,14 @@ const clampWidth = (w: number) => {
  * The agent's browser docked beside its chat. It takes real layout width —
  * the conversation shrinks rather than being covered — and opening, resizing
  * or closing it never touches the underlying session.
+ *
+ * `above` is for anything the caller needs to put over the frame — a session
+ * has two agents who take turns at the browser, so it offers a choice of whose
+ * to watch. It belongs in here rather than in a wrapper around the dock: the
+ * width rules below are written against the row the dock sits in, and an extra
+ * element in between makes "leave 320px for the page" measure the wrong box.
  */
-export function BrowserDock({ agent, onClose, onControlChange }: { agent: AgentView; onClose: () => void; onControlChange?: (control: "agent" | "owner") => void }) {
+export function BrowserDock({ agent, onClose, onControlChange, above }: { agent: AgentView; onClose: () => void; onControlChange?: (control: "agent" | "owner") => void; above?: ReactNode }) {
   const [expanded, setExpanded] = useState(false);
   const [width, setWidth] = useState(() => {
     if (typeof window === "undefined") return 520;
@@ -56,6 +62,8 @@ export function BrowserDock({ agent, onClose, onControlChange }: { agent: AgentV
       >
         <span className="absolute left-1 top-1/2 h-10 w-1 -translate-y-1/2 rounded-full bg-line-2" />
       </div>
+
+      {above && <div className="mb-2 shrink-0">{above}</div>}
 
       <div className="glass relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
         <div className="absolute right-2 top-1.5 z-10 flex gap-1">

@@ -243,9 +243,11 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
       </div>
 
       {dockAgent && (
-        <div className="flex min-h-0 flex-col gap-2">
-          {browserAgents.length > 1 && (
-            <div className="flex shrink-0 gap-1 text-[11px]">
+        <BrowserDock
+          agent={dockAgent}
+          onClose={() => setDockFor(null)}
+          above={browserAgents.length > 1 ? (
+            <div className="flex gap-1 text-[11px]">
               {browserAgents.map((a) => (
                 <button key={a.id} onClick={() => setDockFor(a.id)}
                   className={cn("rounded-md border px-2 py-0.5", a.id === dockAgent.id ? "border-brand/60 bg-brand/10 text-ink" : "border-line text-ink-3 hover:text-ink-2")}>
@@ -253,9 +255,8 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
                 </button>
               ))}
             </div>
-          )}
-          <BrowserDock agent={dockAgent} onClose={() => setDockFor(null)} />
-        </div>
+          ) : undefined}
+        />
       )}
       </div>
     </AppShell>
