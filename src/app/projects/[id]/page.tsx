@@ -316,6 +316,27 @@ function EngineRow({ a }: { a: ProjectActivity }) {
   );
 }
 
+/**
+ * What happened to this session's review — never blank, and never a pass
+ * unless a Reviewer actually finished and said so.
+ *
+ * A session whose Reviewer ran out of steps used to render nothing at all,
+ * which reads exactly like a session that needed no review.
+ */
+export function ReviewChip({ s }: { s: SessionRecord }) {
+  const status = s.reviewStatus ?? (s.lastVerdict === "pass" ? "passed" : s.lastVerdict === "findings" ? "findings" : null);
+  if (!status || s.status === "planned") return null;
+  const look: Record<string, [string, string]> = {
+    passed: ["#5fe3a3", `review passed · ${s.reviewsConsumed}/2`],
+    findings: ["#f5b942", `review findings · ${s.reviewsConsumed}/2`],
+    incomplete: ["#ff8ea3", "review incomplete — unreviewed"],
+    skipped: ["#8b93a7", "no review (by policy)"],
+    not_applicable: ["#8b93a7", "nothing to review"],
+  };
+  const [color, label] = look[status] ?? ["#8b93a7", status];
+  return <span style={{ color }} title={s.reviewPolicyWhy ?? undefined}>{label}</span>;
+}
+
 function ProjectBubble({ m }: { m: ProjectMessage }) {
   const [open, setOpen] = useState(false);
   if (m.role === "observation") {
@@ -403,7 +424,7 @@ function SessionRow({ s, project, names, onStopped }: { s: SessionRecord; projec
         <span className="truncate text-ink">{s.name}</span>
         <span className="ml-auto flex items-center gap-1.5 text-[10px] text-ink-3">
           {s.branch && <GitBranch className="h-3 w-3" />}
-          {s.lastVerdict && <span className={s.lastVerdict === "pass" ? "text-[#5fe3a3]" : "text-warning"}>review {s.lastVerdict} · {s.reviewsConsumed}/2</span>}
+          <ReviewChip s={s} />
           <span style={{ color }}>{s.status.replace("_", " ")}</span>
         </span>
       </button>

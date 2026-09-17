@@ -38,7 +38,7 @@ import {
   patchSession,
   projectChannel,
 } from "./store";
-import type { Finding, SessionRecord } from "./types";
+import type { Finding, ReviewStatus, SessionRecord } from "./types";
 import { getPrompt } from "@/lib/prompts";
 import { skillBlock, skillReminder } from "@/lib/skills/deliver";
 
@@ -76,7 +76,37 @@ export function stopAllSessions(projectId: string): number {
   return n;
 }
 
-export type SessionOutcome = { status: "completed" | "failed" | "timeout" | "paused"; summary: string; verdict: "pass" | "findings" | null; errorText?: string };
+export type SessionOutcome = { status: "completed" | "failed" | "timeout" | "paused"; summary: string; verdict: "pass" | "findings" | null; review?: ReviewStatus; errorText?: string };
+
+/**
+ * Files this session's agent wrote, from its own recorded steps.
+ *
+ * Every runtime reports file work as a `file` event whose detail is the path
+ * (Claude Code names the tool — Write, Edit; Codex reports a file_change). That
+ * is real provenance for "did anyone decide this file should exist", which is
+ * the question a checkpoint has to answer before it commits something.
+ */
+const WROTE = /^(write|edit|multiedit|notebookedit|update|create|file change)$/i;
+function filesWritten(steps: { kind: string; title?: string; meta?: string; detail?: string }[]): string[] {
+  const out = new Set<string>();
+  for (const e of steps) {
+    if (e.kind !== "file") continue;
+    if (!WROTE.test((e.title ?? "").trim()) && !WROTE.test((e.meta ?? "").trim())) continue;
+    const d = (e.detail ?? "").trim();
+    if (!d || d.startsWith("{")) continue;
+    out.add(d);
+  }
+  return [...out];
+}
+
+/** Say plainly what happened to the review, in the Director's own observations. */
+const REVIEW_NOTE: Record<ReviewStatus, string> = {
+  passed: "Reviewer verdict: pass.",
+  findings: "Reviewer returned findings; the repair rounds allowed by policy were applied.",
+  incomplete: "REVIEW INCOMPLETE — the Reviewer could not finish, so this result is UNREVIEWED. It has not passed review. Decide whether to re-review it, verify it during integration, or accept it knowingly.",
+  skipped: "No independent review: you set this session's review policy to none. Do not describe this work as reviewed or verified by anyone but its Builder.",
+  not_applicable: "No review: the session produced nothing to review.",
+};
 
 /**
  * Is this turn continuing a conversation the model can still see? CLI
@@ -204,13 +234,14 @@ async function runAndMonitor(projectId: string, key: string, builderId: string, 
     endedAt: new Date().toISOString(),
     resultSummary: outcome.summary.slice(0, 1_000) || null,
     errorText: outcome.errorText ?? null,
+    ...(outcome.review ? { reviewStatus: outcome.review } : {}),
     ...(steps.length ? { steps } : {}),
   });
   stoppedByOwner.delete(session.id);
   addActivity(
     projectId,
     "session",
-    status === "completed" ? `${key} completed${outcome.verdict ? ` · reviewer: ${outcome.verdict}` : ""}`
+    status === "completed" ? `${key} completed · review: ${outcome.review ?? "unknown"}`
       : status === "paused" ? `${key} preserved (${pausing ? "project pause" : "stopped"})`
         : status === "timeout" ? `${key} timed out`
           : `${key} failed`,
@@ -221,7 +252,7 @@ async function runAndMonitor(projectId: string, key: string, builderId: string, 
   if (pausing) return;
   if (status === "completed") {
     const ready = readySessionsAfter(projectId);
-    observe(`Session ${key} COMPLETED.${outcome.verdict ? ` Reviewer verdict: ${outcome.verdict}.` : ""} Result summary: ${outcome.summary.slice(0, 600) || "(no summary)"}${ready.length ? ` Sessions whose dependencies are now satisfied: ${ready.join(", ")}.` : ""}`);
+    observe(`Session ${key} COMPLETED. ${REVIEW_NOTE[outcome.review ?? "not_applicable"]} Result summary: ${outcome.summary.slice(0, 600) || "(no summary)"}${ready.length ? ` Sessions whose dependencies are now satisfied: ${ready.join(", ")}.` : ""}`);
   } else if (status === "paused") {
     observe(`Session ${key} was STOPPED; its work on disk is preserved. Decide whether to resume it later (resume_sessions), replan around it, or leave it.`);
   } else {
@@ -260,6 +291,7 @@ async function buildAndReview(a: {
   emit: ReturnType<typeof turnEmitter>;
 }): Promise<SessionOutcome> {
   const { project, session, builderId, cwd, timeoutMs, emit } = a;
+  const runStarted = Date.now();
   const projectId = project!.id;
   const key = session.key;
   const builderAgent = readDb().agents.find((x) => x.id === builderId);
@@ -267,9 +299,20 @@ async function buildAndReview(a: {
   // tools and prompt decided together, so the agent is never told it holds
   // something the turn does not actually attach
   const builderCaps = builderAgent ? turnCapabilities(builderAgent, "builder", session.grants?.tools ?? []) : { servers: [], permissions: [] };
-  const reviewerCaps = reviewerAgent ? turnCapabilities(reviewerAgent, "reviewer") : { servers: [], permissions: [] };
+  /*
+   * The Director decides whether this result is independently reviewed.
+   *
+   * It changes what the Builder is asked to prove, so it has to be settled
+   * before the Builder's prompt is assembled, not when the review loop starts.
+   * A Builder whose work nobody checks afterwards must verify it properly; one
+   * handing over to a Reviewer must not do that Reviewer's job as well.
+   */
+  const policy = session.reviewPolicy ?? "required";
+  const willReview = policy !== "none";
+  const reviewerCaps = reviewerAgent && willReview ? turnCapabilities(reviewerAgent, "reviewer") : { servers: [], permissions: [] };
   patchSession(projectId, key, { capabilities: { builder: builderCaps.permissions, reviewer: reviewerCaps.permissions } });
-  const builderSystem = agentPrompt(builderId, `${getPrompt("project-builder-system")}\n\n${getPrompt("project-evidence-rule")}`, builderCaps);
+  const verification = getPrompt(willReview && session.kind !== "qa" ? "project-builder-verify-light" : "project-builder-verify-full");
+  const builderSystem = agentPrompt(builderId, `${getPrompt("project-builder-system")}\n\n${verification}\n\n${getPrompt("project-evidence-rule")}`, builderCaps);
   // registered immediately, not only once something spawns: a session on the
   // API runtime has no child process to kill, and must still be stoppable
   running.set(session.id, () => {});
@@ -329,7 +372,13 @@ async function buildAndReview(a: {
   let consumed = session.reviewsConsumed;
   let previous: Finding[] = session.lastFindings ?? [];
 
-  while (subject && consumed < MAX_REVIEW_ROUNDS) {
+  // the three ways a session ends up without a verdict, kept apart from each
+  // other and from "the Reviewer said nothing was wrong"
+  let review: ReviewStatus = !willReview ? "skipped" : subject ? "findings" : "not_applicable";
+  if (!willReview) addActivity(projectId, "review", `${key} not reviewed — the Director set this session's review policy to none`, session.reviewPolicyWhy ?? undefined);
+  patchSession(projectId, key, { reviewStatus: review });
+
+  while (willReview && subject && consumed < MAX_REVIEW_ROUNDS) {
     if (wasSessionStopped(session.id)) return { status: "paused", summary: answer, verdict };
     const round = (consumed + 1) as 1 | 2;
     addActivity(projectId, "review", `${key} review round ${round} started`);
@@ -341,7 +390,7 @@ async function buildAndReview(a: {
         scopeId: `session:${session.id}:review:${round}`,
         systemPrompt: agentPrompt(project!.reviewerAgentId, getPrompt("project-reviewer-role-line"), reviewerCaps),
         message: withSkills(
-          reviewPrompt({ originalRequest: session.originalRequest, subject, round, previous: round === 2 ? previous : undefined }),
+          reviewPrompt({ originalRequest: session.originalRequest, subject, round, previous: round === 2 ? previous : undefined, kind: session.kind ?? "build" }),
           // every review round is a fresh conversation of its own, so the
           // Reviewer's skills travel with each one
           skillBlock(session.reviewerSkills, { scopeId: `session:${session.id}:review:${round}`, agentId: project!.reviewerAgentId }),
@@ -359,14 +408,19 @@ async function buildAndReview(a: {
       countTokens(projectId, key, r.usage);
     } catch (err) {
       // a Reviewer failure is not a verdict — the run finishes loudly unreviewed
+      // a Reviewer that ran out of budget did not approve anything; the
+      // session says so for the rest of its life rather than going quiet
       emit.finish(reviewEv, "model", `Review round ${round}`, { status: "failed", output: err instanceof Error ? err.message : String(err) });
-      addActivity(projectId, "review", `${key} review round ${round} could not run — result stands unreviewed`, err instanceof Error ? err.message : String(err));
+      addActivity(projectId, "review", `${key} review round ${round} could not finish — result stands UNREVIEWED`, err instanceof Error ? err.message : String(err));
+      review = "incomplete";
+      patchSession(projectId, key, { reviewStatus: review });
       break;
     }
     const parsed = parseVerdict(reviewText);
     verdict = parsed.verdict;
     consumed = round;
-    patchSession(projectId, key, { reviewsConsumed: consumed, lastVerdict: verdict, lastFindings: parsed.items });
+    review = verdict === "pass" ? "passed" : "findings";
+    patchSession(projectId, key, { reviewsConsumed: consumed, lastVerdict: verdict, lastFindings: parsed.items, reviewStatus: review });
     emit.finish(reviewEv, "model", `Review round ${round}`, { status: "done", output: reviewText.slice(0, 2000), meta: verdict === "pass" ? "PASS" : `${parsed.items.length} finding${parsed.items.length === 1 ? "" : "s"}` });
     addActivity(projectId, "review", `${key} review round ${round}: ${verdict === "pass" ? "PASS" : `${parsed.items.length} findings`}`, verdict === "pass" ? undefined : findingsAsText(parsed.items));
     if (verdict === "pass") break;
@@ -422,13 +476,17 @@ async function buildAndReview(a: {
   if (wasSessionStopped(session.id)) return { status: "paused", summary: answer, verdict };
 
   // ---- checkpoint
-  const cp = await checkpoint(cwd, `${key} ${session.name}`);
+  // only what an agent actually wrote gets committed; what merely appeared
+  // while the work ran is left in the tree for someone to decide about
+  const wrote = filesWritten(recentActivity(channel, runStarted).filter((e) => e.actor?.sessionKey === key));
+  const cp = await checkpoint(cwd, `${key} ${session.name}`, wrote.length ? wrote : undefined);
   if (cp) {
-    // name what the agent never staged itself: those are the files that can
-    // become deliverables without anyone deciding they should
-    const note = cp.swept.length ? `swept in unstaged: ${cp.swept.join(", ")}` : undefined;
+    const note = [
+      cp.swept.length ? `swept in unstaged: ${cp.swept.join(", ")}` : "",
+      cp.left.length ? `left uncommitted (nobody wrote them): ${cp.left.join(", ")}` : "",
+    ].filter(Boolean).join(" · ") || undefined;
     addActivity(projectId, "session", `${key} checkpoint ${cp.hash}`, note);
     emit.event({ kind: "file", title: `checkpoint ${cp.hash}`, meta: "git", detail: note, status: "done" });
   }
-  return { status: "completed", summary: answer, verdict };
+  return { status: "completed", summary: answer, verdict, review };
 }

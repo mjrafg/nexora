@@ -242,6 +242,7 @@ export function planSessions(projectId: string, milestoneKey: string, sessions: 
   const project = getProject(projectId);
   if (!project) throw new Error("Project not found.");
   const all = readDb().projectSessions.filter((s) => s.projectId === projectId);
+  const director = readDb().agents.find((a) => a.id === project.directorAgentId)?.name ?? "Director";
   const merged = [
     ...all.filter((s) => !sessions.some((n) => n.key === s.key)).map((s) => ({ key: s.key, dependsOn: s.dependsOn })),
     ...sessions.map((s) => ({ key: s.key, dependsOn: s.dependsOn })),
@@ -254,7 +255,7 @@ export function planSessions(projectId: string, milestoneKey: string, sessions: 
         if (old.status !== "planned" && old.status !== "abandoned") {
           throw new Error(`Session ${s.key} is ${old.status} and its definition can no longer be replaced — use recover_session instead.`);
         }
-        Object.assign(old, { name: s.name, purpose: s.purpose, prompt: s.prompt, dependsOn: s.dependsOn, status: "planned", agentId: s.agentId ?? null, originalRequest: s.prompt, skills: selection(s.skills), reviewerSkills: selection(s.reviewerSkills), grants: resolveGrant(project, s.grantTools, s.grantServers).grant });
+        Object.assign(old, { name: s.name, purpose: s.purpose, prompt: s.prompt, dependsOn: s.dependsOn, status: "planned", agentId: s.agentId ?? null, originalRequest: s.prompt, skills: selection(s.skills), reviewerSkills: selection(s.reviewerSkills), grants: resolveGrant(project, s.grantTools, s.grantServers).grant, kind: s.kind ?? "build", reviewPolicy: s.reviewPolicy ?? "required", reviewPolicyBy: director, reviewPolicyWhy: s.reviewWhy ?? null, reviewStatus: null });
       } else {
         const rec: SessionRecord = {
           id: newId(),
@@ -269,6 +270,14 @@ export function planSessions(projectId: string, milestoneKey: string, sessions: 
           branch: s.isolated ? sessionBranchName(projectId, s.key) : null,
           cwd: null,
           agentId: s.agentId ?? null,
+          kind: s.kind ?? "build",
+          // the Director's decision and its reason travel with the session for
+          // the rest of the project's life: "why was there no Reviewer here?"
+          // has to be answerable from the record, not from memory
+          reviewPolicy: s.reviewPolicy ?? "required",
+          reviewPolicyBy: director,
+          reviewPolicyWhy: s.reviewWhy ?? null,
+          reviewStatus: null,
           grants: resolveGrant(project, s.grantTools, s.grantServers).grant,
           skills: selection(s.skills),
           reviewerSkills: selection(s.reviewerSkills),
@@ -401,6 +410,7 @@ export function stateSnapshot(projectId: string): string {
     `Repository: ${p.rootPath}`,
     `Goal: ${view(p.goal, 1_200)}`,
   ];
+  const names = Object.fromEntries(readDb().agents.map((a) => [a.id, a.name]));
   const milestones = milestonesOf(projectId);
   if (milestones.length === 0) lines.push("No milestone plan yet — produce one with project_set_plan.");
   for (const m of milestones) {
@@ -409,12 +419,16 @@ export function stateSnapshot(projectId: string): string {
     if (m.acceptance) lines.push(`  acceptance: ${view(m.acceptance, 200)}`);
     for (const s of m.sessions) {
       const dep = s.dependsOn.length ? ` deps:[${s.dependsOn.join(",")}]` : "";
+      const who = names[s.agentId ?? p.builderAgentId] ?? s.agentId ?? p.builderAgentId;
       const extras = [
         s.branch ? `branch ${s.branch}` : "shared dir",
-        s.agentId ? `agent ${s.agentId}` : "",
+        // always named, always the agent that will actually run: the Director
+        // used to see nothing here whenever it left agent_id unset
+        `builder ${who}${s.agentId ? "" : " (project default)"}`,
+        `${s.kind ?? "build"} · review ${s.reviewPolicy ?? "required"}${s.reviewStatus ? ` → ${s.reviewStatus}` : ""}`,
         s.status === "paused" && s.stopReason ? (s.stopReason === "user_stop" ? "stopped by the owner" : s.stopReason === "restart" ? "interrupted by a restart" : "stopped by project pause") : "",
         s.resultSummary ? `result: ${s.resultSummary.slice(0, 120)}` : "",
-        s.startedAt ? `reviews ${Math.min(s.reviewsConsumed, MAX_REVIEW_ROUNDS)}/${MAX_REVIEW_ROUNDS} spent${s.lastVerdict ? ` · last verdict: ${s.lastVerdict}` : ""}` : "",
+        s.startedAt && s.reviewPolicy !== "none" ? `reviews ${Math.min(s.reviewsConsumed, MAX_REVIEW_ROUNDS)}/${MAX_REVIEW_ROUNDS} spent${s.lastVerdict ? ` · last verdict: ${s.lastVerdict}` : ""}` : "",
       ]
         .filter(Boolean)
         .join(" · ");

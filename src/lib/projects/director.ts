@@ -43,7 +43,13 @@ import {
   setProjectState,
   stateSnapshot,
 } from "./store";
-import type { MilestoneInput, PendingRecovery, ProjectRecord, SessionInput } from "./types";
+import type { MilestoneInput, PendingRecovery, ProjectRecord, ReviewPolicy, SessionInput, SessionKind } from "./types";
+
+import { contradictsInPlaceTopology } from "./topology";
+
+const KINDS = new Set(["build", "qa", "cleanup"]);
+const POLICIES = new Set(["required", "spot_check", "none"]);
+
 import { getPrompt, renderPrompt } from "@/lib/prompts";
 import { catalogLines, skillServers } from "@/lib/skills/deliver";
 import { GRANTABLE, resolveGrant } from "./grants";
@@ -74,7 +80,7 @@ export function internalBase(): string {
 const DIRECTOR_TOOLS: { name: string; op: string; description: string; inputSchema: Record<string, unknown> }[] = [
   { name: "project_get_state", op: "get_state", description: "Fetch the live project state.", inputSchema: { type: "object", properties: {} } },
   { name: "project_set_plan", op: "set_plan", description: "Submit or revise the master plan (milestones only).", inputSchema: { type: "object", properties: { title: { type: "string", description: "A short name for this project, three to six words. The owner may not have named it — if the current title reads like a fragment of their request, replace it with a real name now." }, summary: { type: "string" }, milestones: { type: "array", items: { type: "object", properties: { key: { type: "string" }, name: { type: "string" }, goal: { type: "string" }, acceptance: { type: "string" }, depends_on: { type: "array", items: { type: "string" } } }, required: ["key", "name", "goal", "acceptance"] } } }, required: ["milestones", "summary"] } },
-  { name: "plan_milestone_sessions", op: "plan_sessions", description: "Decompose one milestone into self-contained sessions.", inputSchema: { type: "object", properties: { milestone: { type: "string" }, reasoning: { type: "string" }, sessions: { type: "array", items: { type: "object", properties: { key: { type: "string" }, name: { type: "string" }, purpose: { type: "string" }, prompt: { type: "string" }, depends_on: { type: "array", items: { type: "string" } }, isolated: { type: "boolean" }, agent_id: { type: "string" }, skills: { type: "array", items: { type: "string" }, description: "skill_ids from list_skills that this session's Builder should be given — choose from the work, usually none, one or two" }, reviewer_skills: { type: "array", items: { type: "string" }, description: "skill_ids for the independent Reviewer of this session; usually different from the Builder's" }, grant_tools: { type: "array", items: { type: "string" }, description: "extra permissions this session's Builder needs, beyond what its agent already has: read_files, write_files, run_commands, web_search, web_fetch, browser, company_profile. Scoped to this session only. Anything else (payments, credentials, writing company data) is refused — those go through the Capability Manager, which asks the owner." }, grant_servers: { type: "array", items: { type: "string" }, description: "tool servers this session may use, by name. Only servers someone on this project has already been given." } }, required: ["key", "name", "purpose", "prompt"] } } }, required: ["milestone", "sessions", "reasoning"] } },
+  { name: "plan_milestone_sessions", op: "plan_sessions", description: "Decompose one milestone into self-contained sessions.", inputSchema: { type: "object", properties: { milestone: { type: "string" }, reasoning: { type: "string" }, sessions: { type: "array", items: { type: "object", properties: { key: { type: "string" }, name: { type: "string" }, purpose: { type: "string" }, prompt: { type: "string" }, depends_on: { type: "array", items: { type: "string" } }, isolated: { type: "boolean" }, agent_id: { type: "string" }, skills: { type: "array", items: { type: "string" }, description: "skill_ids from list_skills that this session's Builder should be given — choose from the work, usually none, one or two" }, reviewer_skills: { type: "array", items: { type: "string" }, description: "skill_ids for the independent Reviewer of this session; usually different from the Builder's" }, kind: { type: "string", enum: ["build", "qa", "cleanup"], description: "what this session is: build (implementation, the default), qa (its job is testing), cleanup (small docs/tidy-up). Decides how much its Builder verifies and what its Reviewer checks." }, review_policy: { type: "string", enum: ["required", "spot_check", "none"], description: "whether this session's result gets an independent Reviewer. required = full independent verification; spot_check = the Reviewer audits the session's own evidence and re-checks the risky parts; none = no Reviewer at all. Default is required." }, review_why: { type: "string", description: "one line: why that review policy is right for this session. Recorded in the project audit trail." }, grant_tools: { type: "array", items: { type: "string" }, description: "extra permissions this session's Builder needs, beyond what its agent already has: read_files, write_files, run_commands, web_search, web_fetch, browser, company_profile. Scoped to this session only. Anything else (payments, credentials, writing company data) is refused — those go through the Capability Manager, which asks the owner." }, grant_servers: { type: "array", items: { type: "string" }, description: "tool servers this session may use, by name. Only servers someone on this project has already been given." } }, required: ["key", "name", "purpose", "prompt"] } } }, required: ["milestone", "sessions", "reasoning"] } },
   { name: "start_sessions", op: "start_sessions", description: "Start planned sessions whose dependencies are satisfied.", inputSchema: { type: "object", properties: { keys: { type: "array", items: { type: "string" } }, timeout_minutes: { type: "number" } }, required: ["keys"] } },
   { name: "resume_sessions", op: "resume_sessions", description: "Resume paused/interrupted sessions in their own conversations.", inputSchema: { type: "object", properties: { keys: { type: "array", items: { type: "string" } }, note: { type: "string" } }, required: ["keys"] } },
   { name: "recover_session", op: "recover_session", description: "Decide how to recover a failed/timed-out session (independently reviewed).", inputSchema: { type: "object", properties: { key: { type: "string" }, action: { type: "string", enum: ["continue", "restart", "abandon", "wait"] }, reasoning: { type: "string" }, new_prompt: { type: "string" }, extra_minutes: { type: "number" } }, required: ["key", "action", "reasoning"] } },
@@ -171,11 +177,13 @@ async function runDirectorTurn(projectId: string, message: string, kind: "user" 
   // Director's assembly exactly as it was before skills existed.
   const skillNote = availableSkills().length ? ["", renderPrompt("skills-director-note", { catalog: catalogLines() })] : [];
   const grantNote = ["", renderPrompt("project-grants-note", { grantable: GRANTABLE.join(", ") })];
+  const reviewNote = ["", getPrompt("project-review-policy-note")];
   const system = [
     getPrompt("project-director-system"),
     "",
     "# AVAILABLE BUILDER AGENTS (use agent_id when planning sessions)",
     builderCatalog(project),
+    ...reviewNote,
     ...skillNote,
     ...grantNote,
     "",
@@ -418,6 +426,9 @@ export async function handleDirectorTool(projectId: string, name: string, args: 
           grantTools: Array.isArray(s.grant_tools) ? (s.grant_tools as unknown[]).map(String) : [],
           grantServers: Array.isArray(s.grant_servers) ? (s.grant_servers as unknown[]).map(String) : [],
           reviewerSkills: Array.isArray(s.reviewer_skills) ? (s.reviewer_skills as unknown[]).map(String) : [],
+          kind: KINDS.has(String(s.kind)) ? (String(s.kind) as SessionKind) : "build",
+          reviewPolicy: POLICIES.has(String(s.review_policy)) ? (String(s.review_policy) as ReviewPolicy) : "required",
+          reviewWhy: s.review_why ? String(s.review_why).slice(0, 400) : undefined,
         }));
         if (sessions.length === 0) return { ok: false, error: "Provide at least one session." };
         if (sessions.some((s) => !s.prompt.trim())) return { ok: false, error: "Every session needs a full self-contained prompt." };
@@ -448,8 +459,22 @@ export async function handleDirectorTool(projectId: string, name: string, args: 
         const ms = planSessions(projectId, msKey, sessions);
         patchMilestone(projectId, ms.key, { status: "running" });
         addActivity(projectId, "decision", `${ms.key} planned into ${ms.sessions.length} sessions`, String(args.reasoning ?? "").slice(0, 1_500));
+        /*
+         * Say back who is actually assigned and what review each session gets.
+         *
+         * agent_id is optional and the Director rarely sends it, so the engine
+         * quietly used the project default — while the Director's reasoning
+         * named a different agent, once the project's own Reviewer. Nobody was
+         * lying; nobody was ever told. An assignment the Director can read is
+         * an assignment it can correct.
+         */
+        const names = Object.fromEntries(readDb().agents.map((x) => [x.id, x.name]));
+        const assigned = ms.sessions
+          .map((x) => `- ${x.key}: builder ${names[x.agentId ?? project.builderAgentId] ?? "?"}${x.agentId ? "" : " (project default — you did not set agent_id)"} · ${x.kind ?? "build"} · review ${x.reviewPolicy ?? "required"}${x.reviewPolicy === "none" ? " (NO Reviewer will run)" : ""}`)
+          .join("\n");
+        const assignmentNote = `\n\nAssignments the engine recorded — if any of these is not what you intended, fix it now with plan_milestone_sessions before starting, and never describe a session to the owner as run by an agent other than the one named here:\n${assigned}`;
         if (refusals.length) addActivity(projectId, "decision", `${ms.key}: ${refusals.length} grant(s) refused`, refusals.join("\n"));
-        return { ok: true, text: `Milestone ${ms.key} now has ${ms.sessions.length} sessions. Start the ready ones with start_sessions.${refusals.length ? `\n\nNot granted:\n${refusals.map((r) => `- ${r}`).join("\n")}` : ""}` };
+        return { ok: true, text: `Milestone ${ms.key} now has ${ms.sessions.length} sessions. Start the ready ones with start_sessions.${refusals.length ? `\n\nNot granted:\n${refusals.map((r) => `- ${r}`).join("\n")}` : ""}${assignmentNote}` };
       }
 
       case "start_sessions": {
@@ -518,10 +543,27 @@ export async function handleDirectorTool(projectId: string, name: string, args: 
         // integration Builder must never have to guess whether a session
         // branch exists, and must not be told to merge one that does not
         const branches = ms.sessions.filter((s) => s.branch && s.status === "completed").map((s) => s.branch as string);
+        const instructions = String(args.instructions ?? "");
+        if (!branches.length) {
+          const clash = contradictsInPlaceTopology(instructions);
+          if (clash) {
+            return {
+              ok: false,
+              error: `Milestone ${msKey}'s sessions were NOT isolated — they committed straight onto ${integration}, so no session branch exists and there is nothing to merge. Your instructions tell the integration session to merge one: "${clash}". That would send it looking for a branch that was never created. Reissue integrate_milestone with instructions that validate the work already on ${integration} in place.`,
+            };
+          }
+        }
         const topology = branches.length
           ? render(getPrompt("project-integration-merge"), { integration_branch: integration, session_branches: branches.join(", ") })
           : render(getPrompt("project-integration-in-place"), { integration_branch: integration });
-        planSessions(projectId, msKey, [{ key: intKey, name: `${ms.name} integration`, purpose: `Integrate and validate milestone ${msKey}`, prompt: render(getPrompt("project-integration-wrapper"), { instructions: String(args.instructions ?? ""), integration_branch: integration, topology }), dependsOn: [], isolated: false }]);
+        // what this milestone's sessions already proved, so integration
+        // validates the integration instead of re-running their acceptance
+        const evidence = ms.sessions
+          .filter((x) => x.key !== intKey && x.status === "completed")
+          .map((x) => `- ${x.key} ${x.name} [${x.kind ?? "build"}] — review: ${x.reviewStatus ?? "unknown"}${x.reviewStatus === "skipped" ? " (no Reviewer ran; the Builder's own verification is all there is)" : ""}${x.reviewStatus === "incomplete" ? " (UNREVIEWED — its Reviewer could not finish; do not trust its claims without checking)" : ""}`)
+          .join("\n") || "- (nothing recorded)";
+        const reuse = render(getPrompt("project-integration-reuse-evidence"), { prior_evidence: evidence });
+        planSessions(projectId, msKey, [{ key: intKey, name: `${ms.name} integration`, purpose: `Integrate and validate milestone ${msKey}`, prompt: render(getPrompt("project-integration-wrapper"), { instructions: `${reuse}\n\n${instructions}`, integration_branch: integration, topology }), dependsOn: [], isolated: false, kind: "integration", reviewPolicy: "required", reviewWhy: "Integration is always independently reviewed." }]);
         patchMilestone(projectId, msKey, { status: "integrating" });
         await launchSession(projectId, intKey, { timeoutMin: args.timeout_minutes ? Number(args.timeout_minutes) : undefined, observe });
         addActivity(projectId, "integration", `${msKey} integration session started`);

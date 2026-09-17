@@ -4,7 +4,7 @@
    in a fresh, read-only session and judges against the ORIGINAL request.
    ------------------------------------------------------------------ */
 
-import type { Finding, ReviewVerdict } from "./types";
+import type { Finding, ReviewVerdict, SessionKind } from "./types";
 import { MAX_REVIEW_ROUNDS, render } from "./prompts";
 import { findingsAsText } from "./store";
 import { getPrompt } from "@/lib/prompts";
@@ -19,7 +19,21 @@ export function subjectFor(delta: { files: string[]; note: string } | null, answ
   return text ? { kind: "answer", answer: text.slice(0, ANSWER_CAP) } : null;
 }
 
-export function reviewPrompt(input: { originalRequest: string; subject: ReviewSubject; round: 1 | 2; previous?: Finding[] }): string {
+/**
+ * What the Reviewer is actually for on this session.
+ *
+ * Without it every review is an acceptance test, so a session whose own job was
+ * testing gets its matrix run twice by two agents who each believe they are the
+ * one doing the real verification.
+ */
+const SCOPE: Record<SessionKind, string> = {
+  build: "project-reviewer-scope-build",
+  qa: "project-reviewer-scope-qa",
+  cleanup: "project-reviewer-scope-cleanup",
+  integration: "project-reviewer-scope-integration",
+};
+
+export function reviewPrompt(input: { originalRequest: string; subject: ReviewSubject; round: 1 | 2; previous?: Finding[]; kind?: SessionKind }): string {
   const parts = [getPrompt("project-reviewer-system"), "", render(getPrompt("project-reviewer-request-section"), { original_request: input.originalRequest })];
   if (input.subject.kind === "changes") {
     parts.push("", render(getPrompt("project-reviewer-changed-section"), { changed_files_note: input.subject.note, changed_files: input.subject.files.join("\n") || "(list unavailable — inspect directly)" }));
@@ -29,6 +43,7 @@ export function reviewPrompt(input: { originalRequest: string; subject: ReviewSu
   if (input.round === 2 && input.previous?.length) {
     parts.push("", render(getPrompt("project-reviewer-continuation-section"), { previous_findings: findingsAsText(input.previous) }));
   }
+  parts.push("", getPrompt(SCOPE[input.kind ?? "build"]));
   parts.push("", render(getPrompt("project-reviewer-round-section"), { review_round: String(input.round), max_review_rounds: String(MAX_REVIEW_ROUNDS) }), "", getPrompt("project-evidence-rule"), "", getPrompt("project-reviewer-output-format"));
   return parts.join("\n");
 }

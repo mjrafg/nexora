@@ -15,6 +15,21 @@ import type { AgentView } from "@/lib/runtime/types";
 import type { ProjectView, SessionRecord } from "@/lib/projects/types";
 import { cn } from "@/lib/utils";
 
+/** The review's real state — a skipped or unfinished review never shows as a pass. */
+function ReviewBadge({ session }: { session: SessionRecord }) {
+  const status = session.reviewStatus ?? (session.lastVerdict === "pass" ? "passed" : session.lastVerdict === "findings" ? "findings" : null);
+  if (!status) return null;
+  const look: Record<string, [string, string]> = {
+    passed: ["#3dd68c", `review passed · ${session.reviewsConsumed}/2`],
+    findings: ["#f5b942", `review findings · ${session.reviewsConsumed}/2`],
+    incomplete: ["#ff5c7a", "review incomplete — unreviewed"],
+    skipped: ["#6f7890", "no reviewer (policy)"],
+    not_applicable: ["#6f7890", "nothing to review"],
+  };
+  const [color, label] = look[status] ?? ["#6f7890", status];
+  return <Badge color={color}>{label}</Badge>;
+}
+
 const STATUS_COLOR: Record<string, string> = {
   planned: "#6f7890", running: "#4f8bff", completed: "#3dd68c", failed: "#ff5c7a",
   timeout: "#f5b942", needs_attention: "#f5b942", paused: "#6f7890", abandoned: "#6f7890",
@@ -147,7 +162,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
         <span className="font-mono text-[12px] text-ink-3">{session.key}</span>
         <h1 className="text-[18px] font-semibold tracking-tight">{session.name}</h1>
         <Badge color={color} dot>{session.status.replace("_", " ")}</Badge>
-        {session.lastVerdict && <Badge color={session.lastVerdict === "pass" ? "#3dd68c" : "#f5b942"}>review {session.lastVerdict} · {session.reviewsConsumed}/2</Badge>}
+        <ReviewBadge session={session} />
         <div className="ms-auto flex items-center gap-2">
           {runningNow && (
             <Button variant="ghost" size="sm" onClick={stop} disabled={stopping}>
@@ -185,8 +200,15 @@ export default function SessionPage({ params }: { params: Promise<{ id: string; 
         <div className="min-h-0 space-y-4 xl:overflow-y-auto xl:pe-1">
           <Panel title="This session">
             <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-[11.5px]">
-              <Fact k="Builder" v={builder} />
-              <Fact k="Reviewer" v={project.reviewerAgentName} />
+              <Fact k="Builder" v={`${builder}${session.agentId ? "" : " (project default)"}`} />
+              <Fact k="Kind" v={session.kind ?? "build"} />
+              {/* the audit question is "why was there no Reviewer here", and it
+                  is answered in the same place the Reviewer would be named */}
+              <Fact
+                k="Review policy"
+                v={<span>{session.reviewPolicy ?? "required"}{session.reviewPolicyBy ? <span className="text-ink-3"> · chosen by {session.reviewPolicyBy}</span> : null}{session.reviewPolicyWhy ? <span className="text-ink-3"> — {session.reviewPolicyWhy}</span> : null}</span>}
+              />
+              <Fact k="Reviewer" v={(session.reviewPolicy ?? "required") === "none" ? <span className="text-ink-3">none — not reviewed by policy</span> : project.reviewerAgentName} />
               {session.branch && <Fact k="Branch" v={<span className="inline-flex items-center gap-1 font-mono text-[10.5px]"><GitBranch className="h-3 w-3" />{session.branch}</span>} />}
               {session.cwd && <Fact k="Worktree" v={<span className="break-all font-mono text-[10.5px]">{session.cwd}</span>} />}
               <Fact k="Started" v={session.startedAt ? new Date(session.startedAt).toLocaleString() : "—"} />

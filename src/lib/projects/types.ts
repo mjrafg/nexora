@@ -25,6 +25,37 @@ export type SessionStatus =
 
 export type ReviewVerdict = "pass" | "findings";
 
+/**
+ * Whether this session's result gets an independent Reviewer, decided by the
+ * Director when it plans the session.
+ *
+ * Review used to be structural: every session that changed a file got one.
+ * That is the right default for work that carries risk and pure waste for a
+ * copy change — and it made the Builder do the Reviewer's job as well, since
+ * neither knew who was verifying what.
+ */
+export type ReviewPolicy = "required" | "spot_check" | "none";
+
+/**
+ * What actually happened to the review — which is not the same question as
+ * what the Reviewer said.
+ *
+ * A Reviewer that ran out of steps, a Director that chose no review, and a
+ * session with nothing to review are three different facts, and every one of
+ * them used to be stored as a null verdict.
+ */
+export type ReviewStatus = "passed" | "findings" | "incomplete" | "skipped" | "not_applicable";
+
+/**
+ * What kind of work a session is, which decides who verifies what.
+ *
+ * A QA session's whole job is testing, so its Reviewer audits the evidence
+ * instead of running the matrix again. An integration session validates the
+ * merge, not the product. Kept deliberately small — this is a scope signal for
+ * the review contract, not a taxonomy.
+ */
+export type SessionKind = "build" | "qa" | "cleanup" | "integration";
+
 export type Finding = {
   severity: "major" | "minor";
   title: string;
@@ -106,6 +137,17 @@ export type SessionRecord = {
   cwd: string | null;
   /** Builder agent chosen by the Director (null = project default) */
   agentId: string | null;
+  /** what this session is, which decides how much the Builder verifies and what its Reviewer checks */
+  kind?: SessionKind;
+  /** the Director's review decision for this session, and why */
+  reviewPolicy?: ReviewPolicy;
+  reviewPolicyBy?: string | null;
+  reviewPolicyWhy?: string | null;
+  /**
+   * What became of the review. Distinct from `lastVerdict`, which only ever
+   * says what a Reviewer that actually finished decided.
+   */
+  reviewStatus?: ReviewStatus | null;
   /**
    * Permissions and tool servers the Director gave this session. Scoped to
    * the session: the agent keeps nothing when it ends.
@@ -201,4 +243,4 @@ export type ProjectView = ProjectRecord & {
 /* ---- director tool inputs ---- */
 
 export type MilestoneInput = { key: string; name: string; goal: string; acceptance: string; dependsOn: string[] };
-export type SessionInput = { key: string; name: string; purpose: string; prompt: string; dependsOn: string[]; isolated: boolean; agentId?: string | null; skills?: string[]; reviewerSkills?: string[]; grantTools?: string[]; grantServers?: string[] };
+export type SessionInput = { key: string; name: string; purpose: string; prompt: string; dependsOn: string[]; isolated: boolean; agentId?: string | null; skills?: string[]; reviewerSkills?: string[]; grantTools?: string[]; grantServers?: string[]; kind?: SessionKind; reviewPolicy?: ReviewPolicy; reviewWhy?: string };

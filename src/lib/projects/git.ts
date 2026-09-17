@@ -119,21 +119,52 @@ export async function mergeDependencyBranches(dir: string, branches: string[]): 
  * still work, and losing it is worse than committing it. What it sweeps is
  * reported back so delivery can question anything that arrived this way.
  */
-export async function checkpoint(dir: string, label: string): Promise<{ hash: string; swept: string[] } | null> {
+export async function checkpoint(
+  dir: string,
+  label: string,
+  /**
+   * Absolute paths the session's agent actually wrote, from its own recorded
+   * file steps. When given, untracked files outside it are left alone.
+   *
+   * A checkpoint used to `git add -A`, which is how a test server's `server.log`
+   * ended up committed to the integration branch and cost a whole cleanup
+   * session to remove. An untracked file nobody wrote through a file tool and
+   * nobody staged is not this session's work — it is what running the work left
+   * behind. Omit the set (no step record available) and the old sweep-everything
+   * behaviour stands, so a missing record can never silently lose real work.
+   */
+  wroteFiles?: string[],
+): Promise<{ hash: string; swept: string[]; left: string[] } | null> {
   const pending = await git(dir, ["status", "--porcelain"]);
   if (!pending.stdout.trim()) return null;
   // files the agent never staged itself — the ones worth questioning later
-  const swept = pending.stdout
+  const untracked = pending.stdout
     .split("\n")
     .filter((l) => l.startsWith("??"))
     .map((l) => l.slice(3).trim())
     .filter(Boolean);
-  await git(dir, ["add", "-A"]);
+
+  let swept = untracked;
+  let left: string[] = [];
+  if (wroteFiles) {
+    const owned = new Set(wroteFiles.map((f) => path.relative(dir, path.resolve(dir, f))));
+    const mine = (f: string) => owned.has(f.replace(/\/$/, "")) || [...owned].some((o) => o.startsWith(`${f.replace(/\/$/, "")}/`));
+    swept = untracked.filter(mine);
+    left = untracked.filter((f) => !mine(f));
+  }
+
+  // tracked edits and deletions always belong to the session; untracked files
+  // only when the agent wrote them
+  await git(dir, ["add", "-u"]);
+  for (const f of swept) await git(dir, ["add", "--", f]);
+  const staged = await git(dir, ["diff", "--cached", "--name-only"]);
+  if (!staged.stdout.trim()) return null;
+
   const msg = `nexora: checkpoint ${label.replace(/\s+/g, " ").trim().slice(0, 60) || "session"}`;
   const c = await git(dir, ["-c", "user.name=Nexora OS", "-c", "user.email=nexora@agent24.io", "commit", "-q", "-m", msg]);
   if (!c.ok) return null;
   const hash = (await git(dir, ["rev-parse", "--short", "HEAD"])).stdout || null;
-  return hash ? { hash, swept } : null;
+  return hash ? { hash, swept, left } : null;
 }
 
 /**

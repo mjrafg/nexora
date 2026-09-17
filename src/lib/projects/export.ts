@@ -31,6 +31,15 @@ const time = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "�
 const dur = (ms?: number) => (ms === undefined ? "" : ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "project";
 
+/** Each of these is a different fact, and none of them is "passed". */
+const REVIEW_OUTCOME: Record<NonNullable<SessionRecord["reviewStatus"]>, string> = {
+  passed: "passed independent review",
+  findings: "reviewer returned findings",
+  incomplete: "INCOMPLETE — the reviewer could not finish; this result was never reviewed",
+  skipped: "skipped — the Director chose no reviewer for this session",
+  not_applicable: "not applicable — nothing to review",
+};
+
 export function buildProjectExport(projectId: string): ProjectExport | null {
   const project = getProject(projectId);
   if (!project) return null;
@@ -126,12 +135,17 @@ function sessionToMarkdown(s: SessionRecord, builderName: string, reviewerName: 
   out.push(`### ${s.key} — ${s.name}`, "");
   out.push(`- **Status:** ${s.status}${s.stopReason ? ` (${s.stopReason.replace("_", " ")})` : ""}`);
   out.push(`- **Purpose:** ${s.purpose || "—"}`);
-  out.push(`- **Builder:** ${s.agentId ? name(s.agentId) : builderName} · **Reviewer:** ${reviewerName}`);
+  const reviewed = (s.reviewPolicy ?? "required") !== "none";
+  out.push(`- **Builder:** ${s.agentId ? name(s.agentId) : `${builderName} (project default)`}${reviewed ? ` · **Reviewer:** ${reviewerName}` : " · **Reviewer:** none — review policy for this session is `none`"}`);
+  out.push(`- **Session kind:** ${s.kind ?? "build"}`);
   if (s.branch) out.push(`- **Branch:** \`${s.branch}\``);
   if (s.cwd) out.push(`- **Worktree:** \`${s.cwd}\``);
   out.push(`- **Started:** ${time(s.startedAt)} · **Ended:** ${time(s.endedAt)}`);
   if (s.tokens) out.push(`- **Model turns:** ${s.tokens.turns} · ${s.tokens.input.toLocaleString()} in / ${s.tokens.output.toLocaleString()} out`);
-  out.push(`- **Review:** ${s.lastVerdict ?? "not reviewed"} · ${s.reviewsConsumed}/2 rounds${s.finalRepairDone ? " · final repair applied" : ""}`);
+  // "why was there no Reviewer on this session?" has to be answerable here,
+  // without guessing and without confusing a skipped review with a passed one
+  out.push(`- **Review policy:** ${s.reviewPolicy ?? "required"}${s.reviewPolicyBy ? ` · chosen by ${s.reviewPolicyBy}` : ""}${s.reviewPolicyWhy ? ` — ${s.reviewPolicyWhy}` : ""}`);
+  out.push(`- **Review outcome:** ${REVIEW_OUTCOME[s.reviewStatus ?? (s.lastVerdict === "pass" ? "passed" : s.lastVerdict === "findings" ? "findings" : "not_applicable")]} · ${s.reviewsConsumed}/2 rounds${s.finalRepairDone ? " · final repair applied" : ""}`);
   if (s.capabilities) {
     out.push(`- **Builder could reach:** ${s.capabilities.builder.join(", ") || "(nothing beyond its runtime)"}`);
     out.push(`- **Reviewer could reach:** ${s.capabilities.reviewer.join(", ") || "(nothing beyond its runtime)"}`);
