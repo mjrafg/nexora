@@ -414,11 +414,27 @@ try {
     fs.writeFileSync(path.join(groot, "leftover.log"), "planted by the acceptance run\n");
     ggit("add", "leftover.log");
     ggit("-c", "user.name=Nexora OS", "-c", "user.email=nexora@agent24.io", "commit", "-qm", "nexora: checkpoint probe");
-    const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "nexora.json"), "utf8"));
-    const rec = raw.projects.find((x) => x.id === gp.id);
-    rec.integrationBranch = `nexora/${gp.id.slice(0, 8)}/integration`;
-    rec.baseBranch = "main";
-    fs.writeFileSync(path.join(DATA_DIR, "nexora.json"), JSON.stringify(raw, null, 2));
+    /*
+     * The store is written by the running engine too, so a single read-modify-
+     * write can be clobbered between the read and the write — which is exactly
+     * what happened: the branches never landed, deliver answered "no integration
+     * branch exists", and the check reported that the guard had failed when the
+     * guard had never been reached. Write, read back, and only proceed once it
+     * actually stuck.
+     */
+    const branch = `nexora/${gp.id.slice(0, 8)}/integration`;
+    let landed = false;
+    for (let i = 0; i < 20 && !landed; i += 1) {
+      const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "nexora.json"), "utf8"));
+      const rec = raw.projects.find((x) => x.id === gp.id);
+      rec.integrationBranch = branch;
+      rec.baseBranch = "main";
+      fs.writeFileSync(path.join(DATA_DIR, "nexora.json"), JSON.stringify(raw, null, 2));
+      await sleep(250);
+      const back = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "nexora.json"), "utf8")).projects.find((x) => x.id === gp.id);
+      landed = back?.integrationBranch === branch;
+    }
+    assert(landed, "could not set up the probe project — its branches kept being overwritten, so the guard was never exercised");
 
     const token = fs.readFileSync(path.join(DATA_DIR, "internal-token"), "utf8").trim();
     const r = await (await fetch(`${BASE}/api/internal/director`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token, projectId: gp.id, op: "deliver", args: {} }) })).json();
