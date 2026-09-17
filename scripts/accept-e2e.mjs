@@ -44,7 +44,6 @@ const login = await fetch(`${BASE}/api/auth/login`, { method: "POST", headers: {
 cookie = (login.headers.get("set-cookie") || "").split(";")[0];
 
 /* ---------------------------------------------------------------- the cheap models the policy names */
-const cat = await api("/api/catalog");
 const conns = (await api("/api/providers")).connections;
 const CHOICES = [
   { runtimeType: "claude-code", providerConnectionId: "conn-anthropic", model: "claude-haiku-4-5" },

@@ -54,7 +54,7 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
     setError(null);
     try {
       // the folder is chosen (and created, if new) in the picker, so it exists by now
-      await api.createProject({ title, rootPath, goal, directorAgentId: director, builderAgentId: builder, reviewerAgentId: reviewer, createDir: false });
+      await api.createProject({ title: title.trim() || undefined, rootPath, goal, directorAgentId: director, builderAgentId: builder, reviewerAgentId: reviewer, createDir: false });
       onCreated();
     } catch (e) {
       setError(errorText(e));
@@ -71,12 +71,14 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
       <div className="w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
         <Panel elevated title="New project" subtitle="The Director plans milestones; Builders build; the Reviewer judges." icon={<Sparkles className="h-4 w-4 text-brand" />} action={<Button variant="ghost" size="xs" onClick={onClose}><X className="h-3 w-3" /></Button>}>
           <div className="space-y-3">
-            <Field label="Title"><Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Billing service v2" autoFocus /></Field>
+            <Field label="Title" hint="Optional. Leave it empty and the Director names the project when it writes the plan.">
+              <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Named from your goal unless you say otherwise" />
+            </Field>
             <Field label="Project folder" hint="Where this project is built, on this server. Pick one you already use, browse to it, or make a new folder here. A git repo is initialised if the folder has none.">
               {picking ? (
                 <FolderPicker
                   value={rootPath || null}
-                  suggestedName={folderNameFrom(title)}
+                  suggestedName={folderNameFrom(title || goal)}
                   recents={recents}
                   recentsLabel="Projects you already have"
                   allowNone={false}
@@ -108,7 +110,7 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
             {error && <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-[#ff8ea3]">{error}</div>}
             <div className="flex justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancel</Button>
-              <Button variant="primary" size="sm" onClick={submit} disabled={busy || !title.trim() || !rootPath.trim() || !goal.trim() || !director || !builder || !reviewer}>
+              <Button variant="primary" size="sm" onClick={submit} disabled={busy || !rootPath.trim() || !goal.trim() || !director || !builder || !reviewer}>
                 {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Start project
               </Button>
             </div>

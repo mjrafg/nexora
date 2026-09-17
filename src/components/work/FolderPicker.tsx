@@ -61,6 +61,14 @@ export function FolderPicker({
     return () => { alive = false; };
   }, [value, browse]);
 
+  /**
+   * Make the folder and step into it.
+   *
+   * It used to make the folder and immediately take it as the answer, which
+   * ended the picker — so nesting one folder inside another was impossible
+   * without leaving and coming back. Creating and choosing are separate acts:
+   * this does the first, and "Use this folder" still does the second.
+   */
   async function create() {
     if (!listing || !newName.trim()) return;
     setBusy(true);
@@ -69,8 +77,7 @@ export function FolderPicker({
       const r = await api.createFolder(listing.path, newName);
       setCreating(false);
       setNewName("");
-      onChange(r.created.path);
-      onClose();
+      browse(r.created.path);
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -198,7 +205,7 @@ export function FolderPicker({
               placeholder="new-folder-name"
               className="min-w-0 flex-1 rounded-md border border-line bg-white/[0.04] px-2 py-1 font-mono text-[11.5px] outline-none focus:border-brand/60"
             />
-            <Button type="submit" variant="primary" size="xs" disabled={busy || !newName.trim()}>Create and use</Button>
+            <Button type="submit" variant="primary" size="xs" disabled={busy || !newName.trim()}>Create</Button>
             <Button type="button" variant="ghost" size="xs" onClick={() => setCreating(false)}>Cancel</Button>
           </form>
         ) : (

@@ -168,7 +168,7 @@ export const api = {
 
   // projects (Director engine)
   projects: () => call<{ projects: ProjectView[] }>("/api/projects"),
-  createProject: (body: { title: string; rootPath: string; goal: string; directorAgentId: string; builderAgentId: string; reviewerAgentId: string; createDir?: boolean }) =>
+  createProject: (body: { title?: string; rootPath: string; goal: string; directorAgentId: string; builderAgentId: string; reviewerAgentId: string; createDir?: boolean }) =>
     call<{ project: ProjectView }>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
   project: (id: string) => call<{ project: ProjectView; activity: ProjectActivity[]; messages: ProjectMessage[] }>(`/api/projects/${id}`),
   deleteProject: (id: string) => call<{ ok: true }>(`/api/projects/${id}`, { method: "DELETE" }),
