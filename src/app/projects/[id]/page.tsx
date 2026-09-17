@@ -332,6 +332,7 @@ export function ReviewChip({ s }: { s: SessionRecord }) {
     passed: ["#5fe3a3", `review passed · ${s.reviewsConsumed}/2`],
     findings: ["#f5b942", `review findings · ${s.reviewsConsumed}/2`],
     incomplete: ["#ff8ea3", "review incomplete — unreviewed"],
+    blocked: ["#f5b942", "review blocked — reviewer lacked a tool"],
     skipped: ["#8b93a7", "no review (by policy)"],
     not_applicable: ["#8b93a7", "nothing to review"],
   };

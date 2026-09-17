@@ -24,7 +24,9 @@ import {
   worktreeDir,
 } from "./git";
 import { MAX_REVIEW_ROUNDS, render } from "./prompts";
-import { parseVerdict, reviewPrompt, subjectFor, type ReviewSubject } from "./review";
+import { headOf } from "./git";
+import { isUnstructuredGuess, parseVerdict, reviewPrompt, subjectFor, type ReviewSubject } from "./review";
+import { requestsForScope } from "@/lib/capabilities/store";
 import {
   addActivity,
   depsSatisfied,
@@ -100,10 +102,30 @@ function filesWritten(steps: { kind: string; title?: string; meta?: string; deta
   return [...out];
 }
 
+/**
+ * The engine's own record of what this session ran.
+ *
+ * Taken from the step stream rather than from anything the model wrote, and
+ * filtered to the worker's own steps — a Reviewer must not be handed the
+ * previous Reviewer's commands as though the session had run them.
+ */
+function commandsRun(steps: { kind: string; title?: string; detail?: string; output?: string; status?: string; durationMs?: number }[]) {
+  return steps
+    .filter((e) => e.kind === "command")
+    .map((e) => ({
+      command: (e.detail ?? e.title ?? "").trim(),
+      status: e.status,
+      durationMs: e.durationMs,
+      output: e.output,
+    }))
+    .filter((c) => c.command);
+}
+
 /** Say plainly what happened to the review, in the Director's own observations. */
 const REVIEW_NOTE: Record<ReviewStatus, string> = {
   passed: "Reviewer verdict: pass.",
   findings: "Reviewer returned findings; the repair rounds allowed by policy were applied.",
+  blocked: "REVIEW BLOCKED — the Reviewer could not complete it because it lacked a capability the work required, not because the code is wrong. No repair was started and no review round was spent. Decide: grant what it asked for and re-review (recover_session), narrow what this session must prove, or accept the result knowingly as unreviewed.",
   incomplete: "REVIEW INCOMPLETE — the Reviewer could not finish, so this result is UNREVIEWED. It has not passed review. Decide whether to re-review it, verify it during integration, or accept it knowingly.",
   skipped: "No independent review: you set this session's review policy to none. Do not describe this work as reviewed or verified by anyone but its Builder.",
   not_applicable: "No review: the session produced nothing to review.",
@@ -402,22 +424,43 @@ async function buildAndReview(a: {
   while (willReview && subject && consumed < MAX_REVIEW_ROUNDS) {
     if (wasSessionStopped(session.id)) return { status: "paused", summary: answer, verdict };
     const round = (consumed + 1) as 1 | 2;
+    const reviewScope = `session:${session.id}:review:${round}`;
     addActivity(projectId, "review", `${key} review round ${round} started`);
     const reviewEv = emit.start("model", `Review round ${round}`, undefined, "Reviewer");
     let reviewText: string;
     try {
       const r = await runAgentTurn({
         agentId: project!.reviewerAgentId,
-        scopeId: `session:${session.id}:review:${round}`,
+        scopeId: reviewScope,
         systemPrompt: agentPrompt(project!.reviewerAgentId, getPrompt("project-reviewer-role-line"), reviewerCaps),
         message: withSkills(
-          reviewPrompt({ originalRequest: session.originalRequest, subject, round, previous: round === 2 ? previous : undefined, kind: session.kind ?? "build", policy }),
+          reviewPrompt({
+            originalRequest: session.originalRequest,
+            subject,
+            round,
+            previous: round === 2 ? previous : undefined,
+            kind: session.kind ?? "build",
+            policy,
+            sessionKey: key,
+            canRunCommands: reviewerCaps.permissions.includes("run_commands"),
+            // `answer` is the CURRENT report: after a repair it is the repair's
+            // own message, not the original build's, so round 2 judges what is
+            // actually there now
+            evidence: { snapshot: await headOf(cwd), report: answer, executions: commandsRun(recentActivity(channel, runStarted).filter((e) => e.actor?.sessionKey === key && e.actor.role !== "Reviewer")) },
+          }),
           // every review round is a fresh conversation of its own, so the
           // Reviewer's skills travel with each one
-          skillBlock(session.reviewerSkills, { scopeId: `session:${session.id}:review:${round}`, agentId: project!.reviewerAgentId }),
+          skillBlock(session.reviewerSkills, { scopeId: reviewScope, agentId: project!.reviewerAgentId }),
         ),
         cwdOverride: cwd,
-        toolProfile: "reader",
+        /*
+         * A Reviewer asked to judge `npm run build` needs to be able to run it.
+         * The profile follows the capabilities rather than being fixed, so the
+         * tools attached and the permissions the prompt describes cannot drift
+         * apart — which is how a Reviewer came to be told it had command
+         * execution while its runtime offered Read, Glob and Grep.
+         */
+        toolProfile: reviewerCaps.permissions.includes("run_commands") ? "verifier" : "reader",
         freshPrompt: true,
         includeGrantedMcp: false,
         servers: reviewerCaps.servers,
@@ -438,6 +481,39 @@ async function buildAndReview(a: {
       break;
     }
     const parsed = parseVerdict(reviewText);
+
+    /*
+     * Did this review stop because it lacked a tool?
+     *
+     * Asked of the capability record for this exact scope — session, role and
+     * round — not of the words the model used. A Reviewer once yielded with
+     * "I've requested command-execution access and will resume the build/test
+     * verification when it lands. Static review so far: source is clean", and
+     * the parser, finding no PASS and no numbered findings, invented
+     * "[major] Reviewer reported issues (unstructured output)". That spent one
+     * of the two review rounds and sent the Builder to repair a review's
+     * missing shell.
+     *
+     * Only the parser's own guess is overridden. A Reviewer that found real
+     * defects and then ran out of road keeps its findings and the repair that
+     * is owed to them — the blocker is recorded beside them, not instead.
+     */
+    const asked = requestsForScope(reviewScope);
+    if (asked.length && parsed.verdict !== "pass" && isUnstructuredGuess(parsed.items)) {
+      const wanted = asked.map((r) => r.capability).join("; ").slice(0, 300);
+      emit.finish(reviewEv, "model", `Review round ${round}`, { status: "failed", output: reviewText.slice(0, 2000), meta: "blocked" });
+      addActivity(
+        projectId,
+        "review",
+        `${key} review round ${round} BLOCKED — the Reviewer lacked a capability it needed`,
+        [`It asked for: ${wanted}`, `Capability request${asked.length === 1 ? "" : "s"}: ${asked.map((r) => `${r.id.slice(0, 8)} (${r.status})`).join(", ")}`, "", "What it did report before stopping:", reviewText.trim().slice(0, 2_000)].join("\n"),
+      );
+      review = "blocked";
+      // the round is not spent: nothing was judged
+      patchSession(projectId, key, { reviewStatus: review, lastVerdict: null });
+      break;
+    }
+
     verdict = parsed.verdict;
     consumed = round;
     review = verdict === "pass" ? "passed" : "findings";

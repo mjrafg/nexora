@@ -24,6 +24,7 @@ function ReviewBadge({ session }: { session: SessionRecord }) {
     passed: ["#3dd68c", `review passed · ${session.reviewsConsumed}/2`],
     findings: ["#f5b942", `review findings · ${session.reviewsConsumed}/2`],
     incomplete: ["#ff5c7a", "review incomplete — unreviewed"],
+    blocked: ["#f5b942", "review blocked — reviewer lacked a tool"],
     skipped: ["#6f7890", "no reviewer (policy)"],
     not_applicable: ["#6f7890", "nothing to review"],
   };

@@ -143,7 +143,7 @@ async function invoke(
     toolLabel?: (name: string) => { title: string; meta?: string };
     onSpawn?: (kill: () => void) => void;
     timeoutMs?: number;
-    toolProfile?: "builder" | "reader";
+    toolProfile?: "builder" | "reader" | "verifier";
     turnBudget?: number;
   }
 ): Promise<RuntimeChatResult> {
@@ -152,7 +152,7 @@ async function invoke(
   // agentic work needs far more turns than a chat reply; every tool call is a turn
   // one turn = one tool call; long browser work needs a real budget, and running
   // out of it is an owner decision (see owner-actions), not a failure
-  const maxTurns = config.advancedSettings.maxTurns ?? req.turnBudget ?? (req.toolProfile === "builder" ? 300 : req.toolProfile === "reader" ? 80 : 25);
+  const maxTurns = config.advancedSettings.maxTurns ?? req.turnBudget ?? (req.toolProfile === "builder" ? 300 : req.toolProfile === "reader" || req.toolProfile === "verifier" ? 80 : 25);
   const toolsArg = req.tools.length ? req.tools.join(",") : "";
 
   const args = [
@@ -250,6 +250,9 @@ export const claudeCodeRuntime: AgentRuntime = {
   async chat(req) {
     const tools =
       req.toolProfile === "builder" ? ["Read", "Glob", "Grep", "Write", "Edit", "Bash", "WebSearch", "WebFetch"]
+      // a Reviewer that may run the project's checks, but still cannot edit its
+      // way to a pass: no Write, no Edit
+      : req.toolProfile === "verifier" ? ["Read", "Glob", "Grep", "Bash"]
       : req.toolProfile === "reader" ? ["Read", "Glob", "Grep"]
       : mapTools(req.agent.toolPermissions);
     const cwd = req.cwdOverride ?? agentWorkspace(req.agent.id, req.resolved.config.advancedSettings.workingDirectory);

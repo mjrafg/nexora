@@ -16,23 +16,7 @@ import type { AgentRecord } from "@/lib/runtime/types";
 import type { InternalToolServer } from "@/lib/tools/internal";
 import { serversForAgent } from "@/lib/tools/servers";
 import { skillServers } from "@/lib/skills/deliver";
-
-/*
- * What a Reviewer keeps: it looks, it does not act.
- *
- * `read_files` is here because the runtime's "reader" profile hands the
- * Reviewer Read/Glob/Grep whatever its permissions say — describing it is
- * honest, and omitting it would tell a Reviewer it cannot read the code it
- * was asked to judge. `browser` is here because a Reviewer cannot judge an
- * interface it is not allowed to look at.
- *
- * Everything else — spending, company logins, writing to company data — is
- * withheld for the length of the review, whatever the agent holds elsewhere.
- */
-const REVIEWER_KEEPS = new Set(["read_files", "browser"]);
-
-/** Permissions that have no meaning inside a build session. */
-const NOT_IN_A_SESSION = new Set<string>(["send_email", "crm"]);
+import { scopePermissions } from "./capability-scope";
 
 export type TurnCapabilities = {
   /** internal tool servers to attach to this turn */
@@ -50,8 +34,7 @@ export type TurnCapabilities = {
  * business spending money or using company logins while reviewing.
  */
 export function turnCapabilities(agent: AgentRecord, role: "builder" | "reviewer", granted: string[] = []): TurnCapabilities {
-  const held = [...new Set([...agent.toolPermissions, ...granted])].filter((p) => !NOT_IN_A_SESSION.has(p));
-  const permissions = role === "reviewer" ? held.filter((p) => REVIEWER_KEEPS.has(p)) : held;
+  const permissions = scopePermissions(agent.toolPermissions, role, granted);
 
   // servers are chosen from the SAME list the prompt will describe, so the two
   // cannot drift apart again
