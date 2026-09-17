@@ -82,10 +82,10 @@ try {
   const plan = await director(projectId, "plan_sessions", {
     milestone: "M1", reasoning: "Harness-driven.",
     sessions: [
-      { key: "S1", name: "Risky build", purpose: "auth", prompt: "Implement login.", depends_on: [], isolated: true, review_policy: "required", review_why: "authentication" },
+      { key: "S1", name: "Risky build", purpose: "auth", prompt: "Implement login.", depends_on: [], isolated: true, kind: "build", review_policy: "required", review_why: "authentication" },
       { key: "S2", name: "Copy tweak", purpose: "wording", prompt: "Fix a typo in the README.", depends_on: [], isolated: true, kind: "cleanup", review_policy: "none", review_why: "one word in a readme" },
       { key: "S3", name: "QA pass", purpose: "testing", prompt: "Run the test matrix.", depends_on: [], isolated: true, kind: "qa", review_policy: "spot_check", review_why: "the session already tests; audit it" },
-      { key: "S4", name: "Unstated", purpose: "default", prompt: "Do a thing.", depends_on: [], isolated: true, agent_id: alt.id },
+      { key: "S4", name: "Named agent", purpose: "who runs it", prompt: "Do a thing.", depends_on: [], isolated: true, agent_id: alt.id, kind: "build", review_policy: "required" },
     ],
   });
   const byKey = (k) => store().projectSessions.find((s) => s.projectId === projectId && s.key === k);
@@ -98,9 +98,19 @@ try {
     return "required / none / spot_check all persisted";
   });
 
-  await test("an unstated policy defaults to required, not to none", async () => {
-    assert(byKey("S4").reviewPolicy === "required", `a session with no review_policy became ${byKey("S4").reviewPolicy}`);
-    return "silence means review";
+  await test("a session that names neither kind nor policy is refused, not defaulted", async () => {
+    const r = await director(projectId, "plan_sessions", {
+      milestone: "M1", reasoning: "Harness-driven.",
+      sessions: [
+        { key: "S5", name: "Undecided", purpose: "no kind, no policy", prompt: "Do a thing.", depends_on: [], isolated: true },
+        { key: "S6", name: "Half decided", purpose: "kind only", prompt: "Do a thing.", depends_on: [], isolated: true, kind: "qa" },
+      ],
+    });
+    assert(!r.ok, "a session with neither field was accepted and silently defaulted");
+    for (const k of ["S5", "S6"]) assert(r.error.includes(k), `${k} is not named in the refusal`);
+    assert(/kind: build/.test(r.error) && /review_policy: required/.test(r.error), `the refusal does not say what to choose: ${String(r.error).slice(0, 200)}`);
+    assert(!byKey("S5"), "the refused session was persisted anyway");
+    return "both named, both options explained, nothing persisted";
   });
 
   await test("the decision is persisted with who made it and why", async () => {
@@ -110,11 +120,11 @@ try {
     return `chosen by ${s.reviewPolicyBy} — ${s.reviewPolicyWhy}`;
   });
 
-  await test("session kind is persisted and defaults to build", async () => {
-    assert(byKey("S3").kind === "qa", `S3 kind is ${byKey("S3").kind}`);
+  await test("the session kind the Director chose is the kind that is stored", async () => {
+    assert(byKey("S3").kind === "qa", `a QA session was stored as ${byKey("S3").kind}`);
     assert(byKey("S2").kind === "cleanup", `S2 kind is ${byKey("S2").kind}`);
-    assert(byKey("S1").kind === "build", `an unstated kind became ${byKey("S1").kind}`);
-    return "qa / cleanup / build";
+    assert(byKey("S1").kind === "build", `S1 kind is ${byKey("S1").kind}`);
+    return "qa / cleanup / build, each as chosen";
   });
 
   await test("the Director is told which agent will actually run each session", async () => {
@@ -146,7 +156,7 @@ try {
       { key: "M1", name: "Work", goal: "Nothing runs.", acceptance: "n/a", depends_on: [] },
       { key: "M2", name: "Shared", goal: "In place.", acceptance: "n/a", depends_on: [] },
     ] });
-    await director(projectId, "plan_sessions", { milestone: "M2", reasoning: "x", sessions: [{ key: "T1", name: "In place", purpose: "p", prompt: "do", depends_on: [], isolated: false }] });
+    await director(projectId, "plan_sessions", { milestone: "M2", reasoning: "x", sessions: [{ key: "T1", name: "In place", purpose: "p", prompt: "do", depends_on: [], isolated: false, kind: "build", review_policy: "required" }] });
     const s = store().projectSessions.find((x) => x.projectId === projectId && x.key === "T1");
     const fsdb = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "nexora.json"), "utf8"));
     fsdb.projectSessions.find((x) => x.id === s.id).status = "completed";

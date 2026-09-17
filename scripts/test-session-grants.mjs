@@ -77,11 +77,11 @@ try {
   const plan = await director(projectId, "plan_sessions", {
     milestone: "M1", reasoning: "Harness-driven.",
     sessions: [
-      { key: "S1", name: "Needs to build", purpose: "legitimate ask", prompt: "Build something.", depends_on: [], isolated: true,
+      { key: "S1", name: "Needs to build", purpose: "legitimate ask", prompt: "Build something.", depends_on: [], isolated: true, kind: "build", review_policy: "required",
         grant_tools: ["write_files", "run_commands", "browser", "company_profile"] },
-      { key: "S2", name: "Overreaches", purpose: "asks for the owner's authority", prompt: "Buy something.", depends_on: [], isolated: true,
+      { key: "S2", name: "Overreaches", purpose: "asks for the owner's authority", prompt: "Buy something.", depends_on: [], isolated: true, kind: "build", review_policy: "required",
         grant_tools: ["payments", "payments_use", "credentials", "company_profile_manage", "not_a_real_permission", "write_files"] },
-      { key: "S3", name: "Asks for nothing", purpose: "control", prompt: "Do nothing.", depends_on: [], isolated: true },
+      { key: "S3", name: "Asks for nothing", purpose: "control", prompt: "Do nothing.", depends_on: [], isolated: true, kind: "build", review_policy: "required" },
     ],
   });
 
@@ -129,7 +129,7 @@ try {
     if (!servers.length) return "no tool servers configured here — nothing to check";
     const r = await director(projectId, "plan_sessions", {
       milestone: "M1", reasoning: "Harness-driven.",
-      sessions: [{ key: "S4", name: "Wants a server", purpose: "unearned reach", prompt: "x", depends_on: [], isolated: true, grant_servers: [servers[0].name] }],
+      sessions: [{ key: "S4", name: "Wants a server", purpose: "unearned reach", prompt: "x", depends_on: [], isolated: true, kind: "build", review_policy: "required", grant_servers: [servers[0].name] }],
     });
     const g = byKey("S4")?.grants;
     assert(!g?.servers?.length, `granted ${servers[0].name} without the owner ever trusting it here`);

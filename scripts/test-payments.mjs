@@ -198,7 +198,27 @@ try {
     assert(db.paymentRequests.some((r) => r.id === autoReq.id && r.status === "SUCCEEDED"), "request not persisted");
     assert(db.paymentAuthorizations.some((a) => a.paymentRequestId === autoReq.id && a.status === "USED"), "authorization not persisted/used");
     assert(db.paymentTransactions.some((t) => t.paymentRequestId === autoReq.id), "transaction not persisted");
-    assert(!JSON.stringify(db.paymentRequests).includes("4111"), "secrets in requests");
+    /*
+     * Not a substring search over the whole blob: a generated uuid contains
+     * "4111" roughly one time in a few hundred, and one duly did — the run
+     * that failed here had id 6790a1c1-74a7-4111-ba4c-…, no card in sight.
+     *
+     * So look for the thing that would actually be a leak, in two stricter
+     * ways: the full PAN however it is punctuated, and card digits appearing
+     * in any stored value that is not an identifier.
+     */
+    const digits = (x) => String(x).replace(/[\s-]/g, "");
+    assert(!digits(JSON.stringify(db.paymentRequests)).includes("4111111111111111"), "full card number in requests");
+    const leaks = [];
+    const scan = (node, where) => {
+      if (typeof node === "string") { if (node.includes("4111")) leaks.push(`${where} = ${node.slice(0, 40)}`); return; }
+      if (Array.isArray(node)) return node.forEach((v, i) => scan(v, `${where}[${i}]`));
+      if (node && typeof node === "object") {
+        for (const [k, v] of Object.entries(node)) if (k !== "id" && !/Id$/.test(k)) scan(v, `${where}.${k}`);
+      }
+    };
+    db.paymentRequests.forEach((r) => scan(r, r.id.slice(0, 8)));
+    assert(!leaks.length, `card digits in request fields: ${leaks.slice(0, 3).join(" | ")}`);
   });
 
   await test("§42 a CANCELLED payment request reaches the agent instead of leaving it parked", async () => {

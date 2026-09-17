@@ -94,9 +94,9 @@ try {
     milestone: "M1", reasoning: "Harness-driven plan.",
     sessions: [
       { key: "S1", name: "Long one", purpose: "the session that gets stopped", agent_id: bld.id,
-        prompt: "Create forty markdown files named part-01.md through part-40.md. Write each one separately, one tool call per file, and put three full paragraphs of original prose in each about a different aspect of software maintenance. Do not use a loop or a script — write every file individually. After each file, read it back to confirm it was written.", depends_on: [], isolated: true },
+        prompt: "Create forty markdown files named part-01.md through part-40.md. Write each one separately, one tool call per file, and put three full paragraphs of original prose in each about a different aspect of software maintenance. Do not use a loop or a script — write every file individually. After each file, read it back to confirm it was written.", depends_on: [], isolated: true, kind: "build", review_policy: "required" },
       { key: "S2", name: "Short one", purpose: "the session that must be left alone", agent_id: bld2.id,
-        prompt: "Create six markdown files named note-1.md through note-6.md, each containing one short paragraph about testing.", depends_on: [], isolated: true },
+        prompt: "Create six markdown files named note-1.md through note-6.md, each containing one short paragraph about testing.", depends_on: [], isolated: true, kind: "build", review_policy: "required" },
     ],
   });
 

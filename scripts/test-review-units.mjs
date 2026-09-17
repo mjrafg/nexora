@@ -23,7 +23,16 @@ async function test(name, fn) {
 // is why the topology check lives in its own file rather than inside director.ts
 const { checkpoint } = await import("../src/lib/projects/git.ts");
 const { contradictsInPlaceTopology } = await import("../src/lib/projects/topology.ts");
-const { reviewOutcome, reviewCoverageNote } = await import("../src/lib/projects/review-status.ts");
+const { reviewOutcome, reviewCoverageNote, sessionVerification } = await import("../src/lib/projects/review-status.ts");
+
+// the registry is server-side; these stand in for it so the rule can be checked alone
+const FAKE = {
+  "project-builder-verify-light": "LIGHT: {{reviewer}} performs the acceptance verification after you.",
+  "project-builder-verify-full": "FULL: you own the verification of this work.",
+  "project-session-responsibility": "RESPONSIBILITY-START\n{{verification}}\nThis section decides who checks it.",
+};
+const fakePrompt = (id) => FAKE[id] ?? `<missing ${id}>`;
+const fakeRender = (t, v) => t.replace(/\{\{(\w+)\}\}/g, (_, k) => v[k] ?? "");
 
 const repos = [];
 function repo() {
@@ -133,6 +142,37 @@ try {
     assert(!/\bD4\b/.test(note), "a session that was never delivered was listed");
     assert(reviewCoverageNote([{ key: "X", status: "completed", reviewStatus: "passed", reviewPolicy: "required" }]) === "", "a fully reviewed delivery still says something");
     return note.slice(0, 96);
+  });
+
+  await test("a required review on a build session hands acceptance to the Reviewer", async () => {
+    const r = sessionVerification({ policy: "required", kind: "build", reviewerName: "Pixel", prompt: fakePrompt, render: fakeRender });
+    assert(r.owner === "reviewer", `owner is ${r.owner}`);
+    assert(/LIGHT: Pixel performs/.test(r.responsibility), `the Builder was not pointed at the Reviewer by name: ${r.responsibility}`);
+    assert(/This section decides who checks it/.test(r.responsibility), "the engine's closing word is missing");
+    assert(/Pixel still performs the acceptance pass/.test(r.repairScope), `a repair turn loses the split: ${r.repairScope}`);
+    return "reviewer owns acceptance, named to the Builder";
+  });
+
+  await test("the session owns its own verification when nobody else will do it", async () => {
+    for (const [policy, kind] of [["none", "build"], ["spot_check", "build"], ["spot_check", "qa"], ["required", "qa"], ["none", "cleanup"]]) {
+      const r = sessionVerification({ policy, kind, reviewerName: "Pixel", prompt: fakePrompt, render: fakeRender });
+      assert(r.owner === "builder", `${policy}/${kind} handed acceptance to the reviewer`);
+      assert(/FULL: you own the verification/.test(r.responsibility), `${policy}/${kind} got the light brief`);
+    }
+    // the one that caused the duplicate run: required + qa must NOT go light
+    const qa = sessionVerification({ policy: "required", kind: "qa", reviewerName: "Pixel", prompt: fakePrompt, render: fakeRender });
+    assert(qa.owner === "builder", "a QA session was told not to test");
+    return "none, spot_check and qa all keep verification in the session";
+  });
+
+  await test("the engine's word on verification is wrapped so it can come last", async () => {
+    const r = sessionVerification({ policy: "required", kind: "build", reviewerName: "Pixel", prompt: fakePrompt, render: fakeRender });
+    const i = r.responsibility.indexOf("RESPONSIBILITY-START");
+    const j = r.responsibility.indexOf("LIGHT:");
+    const k = r.responsibility.indexOf("This section decides who checks it");
+    assert(i === 0, "the responsibility block does not start with its own header");
+    assert(i < j && j < k, `the verification text is not inside the wrapper: ${r.responsibility}`);
+    return "wrapper opens, verification inside, engine closes";
   });
 
   console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);

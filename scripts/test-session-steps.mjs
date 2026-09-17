@@ -90,7 +90,7 @@ try {
   await director(projectId, "plan_sessions", {
     milestone: "M1", reasoning: "Harness-driven plan.",
     sessions: [{ key: "S1", name: "Add a greeting", purpose: "small real work",
-      prompt: "Create hello.js that prints 'hello'. Run it with node to confirm it works, then append a line to README.md describing it.", depends_on: [], isolated: true }],
+      prompt: "Create hello.js that prints 'hello'. Run it with node to confirm it works, then append a line to README.md describing it.", depends_on: [], isolated: true, kind: "build", review_policy: "required" }],
   });
 
   const byKey = () => store().projectSessions.find((s) => s.projectId === projectId && s.key === "S1");

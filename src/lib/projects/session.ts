@@ -41,6 +41,7 @@ import {
 import type { Finding, ReviewStatus, SessionRecord } from "./types";
 import { getPrompt } from "@/lib/prompts";
 import { skillBlock, skillReminder } from "@/lib/skills/deliver";
+import { sessionVerification } from "./review-status";
 
 void _unused;
 
@@ -312,16 +313,27 @@ async function buildAndReview(a: {
   const reviewerCaps = reviewerAgent && willReview ? turnCapabilities(reviewerAgent, "reviewer") : { servers: [], permissions: [] };
   patchSession(projectId, key, { capabilities: { builder: builderCaps.permissions, reviewer: reviewerCaps.permissions } });
   /*
-   * Light only when somebody else is doing the acceptance verification.
+   * Where this is said matters as much as what it says.
    *
-   * `spot_check` means the Reviewer audits what this session reports, so this
-   * session has to have something worth auditing — telling its Builder to do
-   * the minimum would leave nobody verifying anything. Same for a QA session,
-   * whose whole job is the testing.
+   * It used to live in the system prompt, and the Director's brief — arriving
+   * later, about this specific job — told the Builder the opposite: "all must
+   * work, verified by you before finishing", a Definition of Done that meant
+   * opening the app and checking every feature by hand. The Builder did what
+   * the nearer, more specific instruction said, and then the Reviewer it was
+   * meant to be handing off to checked everything again.
+   *
+   * So the engine now gets the last word instead of the first: this block goes
+   * after the brief, states that the requirements are a specification rather
+   * than a checklist, and says plainly that it is the one deciding who checks.
    */
-  const builderVerifies = policy !== "required" || session.kind === "qa";
-  const verification = getPrompt(builderVerifies ? "project-builder-verify-full" : "project-builder-verify-light");
-  const builderSystem = agentPrompt(builderId, `${getPrompt("project-builder-system")}\n\n${verification}\n\n${getPrompt("project-evidence-rule")}`, builderCaps);
+  const { responsibility, repairScope } = sessionVerification({
+    policy,
+    kind: session.kind ?? "build",
+    reviewerName: reviewerAgent?.name ?? "An independent Reviewer",
+    prompt: getPrompt,
+    render,
+  });
+  const builderSystem = agentPrompt(builderId, `${getPrompt("project-builder-system")}\n\n${getPrompt("project-evidence-rule")}`, builderCaps);
   // registered immediately, not only once something spawns: a session on the
   // API runtime has no child process to kill, and must still be stoppable
   running.set(session.id, () => {});
@@ -336,7 +348,7 @@ async function buildAndReview(a: {
   const channel = projectChannel(projectId);
   const builderEmit = asActor(emit, actorFor(builderId, "Builder", key), channel);
   const message = withSkills(
-    brief,
+    `${brief}\n\n${responsibility}`,
     conversationContinues(builderId, session.builderSessionId)
       ? skillReminder(session.skills)
       : skillBlock(session.skills, { scopeId, agentId: builderId }),
@@ -448,7 +460,7 @@ async function buildAndReview(a: {
         scopeId,
         systemPrompt: builderSystem,
         message: withSkills(
-          render(tmpl, { findings: findingsAsText(parsed.items) }),
+          `${render(tmpl, { findings: findingsAsText(parsed.items) })}\n\n${render(getPrompt("project-repair-responsibility"), { scope: repairScope })}`,
           conversationContinues(builderId, getSession(projectId, key)?.builderSessionId)
             ? skillReminder(session.skills)
             : skillBlock(session.skills, { scopeId, agentId: builderId }),

@@ -76,7 +76,7 @@ try {
     await director(projectId, "set_plan", { summary: "one", milestones: [{ key: "M0", name: "Cap", goal: "g", acceptance: "a", depends_on: [] }] });
     await director(projectId, "plan_sessions", {
       milestone: "M0", reasoning: "x",
-      sessions: [{ key: "C1", name: "cap", purpose: "p", prompt: "Print the word done and stop.", depends_on: [], isolated: false }],
+      sessions: [{ key: "C1", name: "cap", purpose: "p", prompt: "Print the word done and stop.", depends_on: [], isolated: false, kind: "build", review_policy: "required" }],
     });
     await director(projectId, "start_sessions", { keys: ["C1"], timeout_minutes: 6 });
     let caps = null;
@@ -112,7 +112,7 @@ try {
     await director(projectId, "set_plan", { summary: "one", milestones: [{ key: "M0", name: "Cap", goal: "g", acceptance: "a", depends_on: [] }, { key: "M1", name: "Work", goal: "g", acceptance: "a", depends_on: [] }] });
     const r = await director(projectId, "plan_sessions", {
       milestone: "M1", reasoning: "x",
-      sessions: [{ key: "SX", name: "n", purpose: "p", prompt: "do it", depends_on: [], isolated: false, agent_id: rev.id }],
+      sessions: [{ key: "SX", name: "n", purpose: "p", prompt: "do it", depends_on: [], isolated: false, agent_id: rev.id, kind: "build", review_policy: "required" }],
     });
     assert(!r.ok, "the engine accepted the Reviewer as the Builder");
     assert(/Reviewer/.test(r.error) && /cannot also build/.test(r.error), `unclear refusal: ${r.error}`);
@@ -123,7 +123,7 @@ try {
   await test("C - integration instructions match the real session topology", async () => {
     await director(projectId, "plan_sessions", {
       milestone: "M1", reasoning: "x",
-      sessions: [{ key: "S1", name: "in place", purpose: "p", prompt: "write a line into README.md", depends_on: [], isolated: false }],
+      sessions: [{ key: "S1", name: "in place", purpose: "p", prompt: "write a line into README.md", depends_on: [], isolated: false, kind: "build", review_policy: "required" }],
     });
     // pretend it finished so integration can be planned, without running a model
     const s = store().projectSessions.find((x) => x.projectId === projectId && x.key === "S1");

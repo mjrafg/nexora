@@ -7,7 +7,7 @@
    bundle and broke the build.
    ------------------------------------------------------------------ */
 
-import type { SessionRecord } from "./types";
+import type { ReviewPolicy, SessionKind, SessionRecord } from "./types";
 
 /**
  * What to say about this session's review.
@@ -40,4 +40,34 @@ export function reviewCoverageNote(sessions: Pick<SessionRecord, "key" | "status
     unreviewed.length ? `NOT REVIEWED — the Reviewer never finished on: ${unreviewed.join(", ")}. This work has not passed review; do not tell the owner it has.` : "",
     excused.length ? `No independent review by your own decision on: ${excused.join(", ")}.` : "",
   ].filter(Boolean).join(" ");
+}
+
+/**
+ * Who does the acceptance verification on this session, and the text that says so.
+ *
+ * Kept here, away from the engine's plumbing and free of imports, because it
+ * is the one rule the whole responsibility split turns on and it has to be
+ * checkable on its own. `prompt` and `render` are passed in so the registry
+ * stays the only source of the wording.
+ */
+export function sessionVerification(o: {
+  policy: ReviewPolicy;
+  kind: SessionKind;
+  reviewerName: string;
+  prompt: (id: string) => string;
+  render: (template: string, values: Record<string, string>) => string;
+}): { owner: "builder" | "reviewer"; responsibility: string; repairScope: string } {
+  // the Builder keeps the acceptance work unless an independent Reviewer is
+  // actually going to do it — and on a QA session the testing IS the work
+  const owner: "builder" | "reviewer" = o.policy === "required" && o.kind !== "qa" ? "reviewer" : "builder";
+  const verification = owner === "builder"
+    ? o.prompt("project-builder-verify-full")
+    : o.render(o.prompt("project-builder-verify-light"), { reviewer: o.reviewerName });
+  return {
+    owner,
+    responsibility: o.render(o.prompt("project-session-responsibility"), { verification }),
+    repairScope: owner === "builder"
+      ? "you own the verification of this work, so re-check what you changed properly."
+      : `${o.reviewerName} still performs the acceptance pass — fix the findings and smoke-check your fix, do not re-test the whole request.`,
+  };
 }

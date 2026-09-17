@@ -120,14 +120,14 @@ try {
       {
         key: "S1", name: "Accessible status rows", purpose: "UI work",
         prompt: "In index.html, replace the empty #board with three rows for the services api, web and worker. Each row shows the service name and a status word, with a colour. It must be readable on a phone and have a proper heading structure and labels a screen reader can use. Plain HTML and CSS in that one file. Do not install anything, do not run a package manager, do not reach the network. Then say what you changed.",
-        depends_on: [], isolated: true,
+        depends_on: [], isolated: true, kind: "build", review_policy: "required",
         skills: ["frontend-ui-engineering", "no-such-skill", "test-driven-development"],
         reviewer_skills: ["code-review-and-quality"],
       },
       {
         key: "S2", name: "Record the author", purpose: "Clerical",
         prompt: "Create CONTRIBUTORS.md listing the single commit author already in this repository's git history. Nothing else. Do not install anything and do not reach the network.",
-        depends_on: [], isolated: true, skills: [], reviewer_skills: [],
+        depends_on: [], isolated: true, kind: "build", review_policy: "required", skills: [], reviewer_skills: [],
       },
     ],
   });
