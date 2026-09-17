@@ -11,14 +11,15 @@ import { ActivityFeed } from "@/components/agents/ActivityFeed";
 import { BrowserDock } from "@/components/agents/BrowserDock";
 import { api, errorText, type ActivityEvent, type SkillView } from "@/lib/client-api";
 import { TOOL_CATALOG } from "@/lib/runtime/catalog";
+import { reviewOutcome } from "@/lib/projects/review-status";
 import type { AgentView } from "@/lib/runtime/types";
 import type { ProjectView, SessionRecord } from "@/lib/projects/types";
 import { cn } from "@/lib/utils";
 
 /** The review's real state — a skipped or unfinished review never shows as a pass. */
 function ReviewBadge({ session }: { session: SessionRecord }) {
-  const status = session.reviewStatus ?? (session.lastVerdict === "pass" ? "passed" : session.lastVerdict === "findings" ? "findings" : null);
-  if (!status) return null;
+  const status = reviewOutcome(session);
+  if (status === "not_applicable" && !session.startedAt) return null;
   const look: Record<string, [string, string]> = {
     passed: ["#3dd68c", `review passed · ${session.reviewsConsumed}/2`],
     findings: ["#f5b942", `review findings · ${session.reviewsConsumed}/2`],

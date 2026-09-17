@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Markdown } from "@/components/ui/Markdown";
 import { ActivityFeed } from "@/components/agents/ActivityFeed";
 import { api, errorText, type ActivityEvent } from "@/lib/client-api";
+import { reviewOutcome } from "@/lib/projects/review-status";
 import { textDirection } from "@/lib/direction";
 import type { ProjectView, ProjectActivity, ProjectMessage, SessionRecord, MilestoneView } from "@/lib/projects/types";
 import { cn } from "@/lib/utils";
@@ -324,8 +325,9 @@ function EngineRow({ a }: { a: ProjectActivity }) {
  * which reads exactly like a session that needed no review.
  */
 export function ReviewChip({ s }: { s: SessionRecord }) {
-  const status = s.reviewStatus ?? (s.lastVerdict === "pass" ? "passed" : s.lastVerdict === "findings" ? "findings" : null);
-  if (!status || s.status === "planned") return null;
+  if (s.status === "planned" && (s.reviewPolicy ?? "required") !== "none") return null;
+  const status = reviewOutcome(s);
+  if (status === "not_applicable" && !s.startedAt) return null;
   const look: Record<string, [string, string]> = {
     passed: ["#5fe3a3", `review passed · ${s.reviewsConsumed}/2`],
     findings: ["#f5b942", `review findings · ${s.reviewsConsumed}/2`],

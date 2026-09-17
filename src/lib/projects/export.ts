@@ -9,6 +9,7 @@
 
 import type { ActivityEvent } from "@/lib/activity";
 import { readDb } from "@/lib/store/db";
+import { reviewOutcome } from "./review-status";
 import { getProject, getSession, milestonesOf } from "./store";
 import type { MilestoneView, ProjectActivity, ProjectMessage, ProjectRecord, SessionRecord } from "./types";
 
@@ -145,7 +146,7 @@ function sessionToMarkdown(s: SessionRecord, builderName: string, reviewerName: 
   // "why was there no Reviewer on this session?" has to be answerable here,
   // without guessing and without confusing a skipped review with a passed one
   out.push(`- **Review policy:** ${s.reviewPolicy ?? "required"}${s.reviewPolicyBy ? ` · chosen by ${s.reviewPolicyBy}` : ""}${s.reviewPolicyWhy ? ` — ${s.reviewPolicyWhy}` : ""}`);
-  out.push(`- **Review outcome:** ${REVIEW_OUTCOME[s.reviewStatus ?? (s.lastVerdict === "pass" ? "passed" : s.lastVerdict === "findings" ? "findings" : "not_applicable")]} · ${s.reviewsConsumed}/2 rounds${s.finalRepairDone ? " · final repair applied" : ""}`);
+  out.push(`- **Review outcome:** ${REVIEW_OUTCOME[reviewOutcome(s)]} · ${s.reviewsConsumed}/2 rounds${s.finalRepairDone ? " · final repair applied" : ""}`);
   if (s.capabilities) {
     out.push(`- **Builder could reach:** ${s.capabilities.builder.join(", ") || "(nothing beyond its runtime)"}`);
     out.push(`- **Reviewer could reach:** ${s.capabilities.reviewer.join(", ") || "(nothing beyond its runtime)"}`);
