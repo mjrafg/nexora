@@ -3,7 +3,7 @@
 import { Fragment, use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Download, ExternalLink, Pause, Play, Square, Trash2, Loader2, Send, Boxes, Activity as ActivityIcon, ChevronDown, ChevronRight, GitBranch, CheckCircle2, XCircle, Circle, CircleDot, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Check, Copy, Download, ExternalLink, Pause, Play, Square, Trash2, Loader2, Send, Boxes, Activity as ActivityIcon, ChevronDown, ChevronRight, GitBranch, CheckCircle2, XCircle, Circle, CircleDot, AlertTriangle } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Panel } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
@@ -39,6 +39,11 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
   // id, and an id is not an answer to "who built this"
   const [names, setNames] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState("");
+  /** sessions ticked for export; empty means every session */
+  const [picked, setPicked] = useState<string[]>([]);
+  const togglePick = useCallback((key: string) => {
+    setPicked((cur) => (cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]));
+  }, []);
   const [busy, setBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -158,9 +163,12 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
         <Link href={`/projects/${id}/director`}>
           <Button variant="ghost" size="sm"><Boxes className="h-3.5 w-3.5" /> Director</Button>
         </Link>
-        <a href={`/api/projects/${id}/export?format=markdown`} download>
-          <Button variant="ghost" size="sm"><Download className="h-3.5 w-3.5" /> Export</Button>
-        </a>
+        <ExportPair label="Export project" href={`/api/projects/${id}/export?format=markdown`} />
+        <ExportPair
+          label={picked.length ? `Export ${picked.length} session${picked.length === 1 ? "" : "s"}` : "Export sessions"}
+          href={`/api/projects/${id}/export?format=markdown&sessions=${picked.map(encodeURIComponent).join(",")}`}
+          title={picked.length ? `${picked.join(", ")}` : "Every session's log. Tick sessions in the plan to narrow it."}
+        />
         {(canPause || canResume) && (
           <Button variant="ghost" size="sm" onClick={pauseResume} disabled={busy}>
             {canResume ? <><Play className="h-3.5 w-3.5" /> Resume</> : <><Pause className="h-3.5 w-3.5" /> Pause</>}
@@ -205,7 +213,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
           <div className="min-h-0 flex-1 overflow-y-auto">
             {tab === "milestones" && (
               project.milestones.length === 0 ? <p className="text-[12px] text-ink-3">No plan yet — the Director is working on it.</p> :
-              <div className="space-y-2">{project.milestones.map((m) => <MilestoneCard key={m.id} m={m} project={project} names={names} onStopped={load} />)}</div>
+              <div className="space-y-2">{project.milestones.map((m) => <MilestoneCard key={m.id} m={m} project={project} names={names} onStopped={load} picked={picked} onPick={togglePick} />)}</div>
             )}
             {tab === "activity" && (
               <div className="space-y-1">
@@ -297,6 +305,54 @@ function ActivityNow({ project }: { project: ProjectView }) {
   );
 }
 
+/**
+ * One export, offered two ways.
+ *
+ * A file is right when you want to keep it; the clipboard is right when you
+ * are about to paste the log into a conversation, which is most of the time.
+ * Both read the same endpoint, so what you copy and what you download cannot
+ * drift apart.
+ */
+function ExportPair({ label, href, disabled, title }: { label: string; href: string; disabled?: boolean; title?: string }) {
+  const [state, setState] = useState<"idle" | "copying" | "copied" | "failed">("idle");
+  async function copy() {
+    setState("copying");
+    try {
+      const text = await (await fetch(`${href}&inline=1`)).text();
+      await navigator.clipboard.writeText(text);
+      setState("copied");
+      setTimeout(() => setState("idle"), 1800);
+    } catch {
+      setState("failed");
+      setTimeout(() => setState("idle"), 2500);
+    }
+  }
+  return (
+    <span className="inline-flex items-center rounded-lg border border-line" title={title}>
+      <a
+        href={disabled ? undefined : href}
+        download
+        aria-disabled={disabled}
+        className={cn("inline-flex items-center gap-1 px-2 py-1 text-[11.5px]", disabled ? "cursor-not-allowed text-ink-3/50" : "text-ink-2 hover:text-ink")}
+        onClick={(e) => disabled && e.preventDefault()}
+      >
+        <Download className="h-3.5 w-3.5" /> {label}
+      </a>
+      <span className="h-4 w-px bg-line" />
+      <button
+        type="button"
+        disabled={disabled || state === "copying"}
+        onClick={copy}
+        className={cn("inline-flex items-center gap-1 px-2 py-1 text-[11.5px]", disabled ? "cursor-not-allowed text-ink-3/50" : "text-ink-2 hover:text-ink")}
+      >
+        {state === "copied" ? <><Check className="h-3.5 w-3.5 text-[#5fe3a3]" /> Copied</>
+          : state === "failed" ? <><XCircle className="h-3.5 w-3.5 text-[#ff8ea3]" /> Failed</>
+            : <><Copy className="h-3.5 w-3.5" /> Copy</>}
+      </button>
+    </span>
+  );
+}
+
 /** Something the engine did, in the run's own story rather than on a tab. */
 function EngineRow({ a }: { a: ProjectActivity }) {
   const [open, setOpen] = useState(false);
@@ -380,7 +436,7 @@ function ProjectBubble({ m }: { m: ProjectMessage }) {
   );
 }
 
-function MilestoneCard({ m, project, names, onStopped }: { m: MilestoneView; project: ProjectView; names: Record<string, string>; onStopped: () => void }) {
+function MilestoneCard({ m, project, names, onStopped, picked, onPick }: { m: MilestoneView; project: ProjectView; names: Record<string, string>; onStopped: () => void; picked: string[]; onPick: (key: string) => void }) {
   const [open, setOpen] = useState(true);
   const Icon = m.status === "completed" ? CheckCircle2 : m.status === "planned" ? Circle : CircleDot;
   return (
@@ -395,14 +451,14 @@ function MilestoneCard({ m, project, names, onStopped }: { m: MilestoneView; pro
         <div className="border-t border-line px-2.5 py-2">
           <p className="text-[11.5px] text-ink-2">{m.goal}</p>
           {m.acceptance && <p className="mt-1 text-[10.5px] text-ink-3"><span className="text-ink-2">Acceptance:</span> {m.acceptance}</p>}
-          {m.sessions.length > 0 && <div className="mt-2 space-y-1">{m.sessions.map((s) => <SessionRow key={s.id} s={s} project={project} names={names} onStopped={onStopped} />)}</div>}
+          {m.sessions.length > 0 && <div className="mt-2 space-y-1">{m.sessions.map((s) => <SessionRow key={s.id} s={s} project={project} names={names} onStopped={onStopped} picked={picked.includes(s.key)} onPick={onPick} />)}</div>}
         </div>
       )}
     </div>
   );
 }
 
-function SessionRow({ s, project, names, onStopped }: { s: SessionRecord; project: ProjectView; names: Record<string, string>; onStopped: () => void }) {
+function SessionRow({ s, project, names, onStopped, picked, onPick }: { s: SessionRecord; project: ProjectView; names: Record<string, string>; onStopped: () => void; picked: boolean; onPick: (key: string) => void }) {
   const [open, setOpen] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
@@ -417,8 +473,14 @@ function SessionRow({ s, project, names, onStopped }: { s: SessionRecord; projec
   }
   const color = SESSION_COLOR[s.status] ?? "#6f7890";
   return (
-    <div className="rounded-md border border-line/70 bg-black/20">
-      <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[11.5px]">
+    <div className={cn("rounded-md border bg-black/20", picked ? "border-brand/50" : "border-line/70")}>
+      <div className="flex items-center">
+        {/* its own control, so ticking a session for export does not also expand it */}
+        <label className="flex cursor-pointer items-center py-1.5 pl-2 pr-1" title={`Include ${s.key} in the session export`} onClick={(e) => e.stopPropagation()}>
+          <input type="checkbox" checked={picked} onChange={() => onPick(s.key)} className="h-3 w-3 cursor-pointer accent-[#6d7cff]" />
+          <span className="sr-only">Include {s.key} in the export</span>
+        </label>
+      <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 py-1.5 pl-1 pr-2 text-left text-[11.5px]">
         {s.status === "running" ? <Loader2 className="h-3 w-3 animate-spin text-brand" /> : s.status === "needs_attention" || s.status === "failed" || s.status === "timeout" ? <AlertTriangle className="h-3 w-3 text-warning" /> : <span className="h-2 w-2 rounded-full" style={{ background: color }} />}
         <Link href={`/projects/${project.id}/sessions/${encodeURIComponent(s.key)}`} onClick={(e) => e.stopPropagation()}
           className="shrink-0 font-mono text-ink-3 underline-offset-2 hover:text-brand hover:underline" title="Open this session">
@@ -431,6 +493,7 @@ function SessionRow({ s, project, names, onStopped }: { s: SessionRecord; projec
           <span style={{ color }}>{s.status.replace("_", " ")}</span>
         </span>
       </button>
+      </div>
       {s.status === "running" && (
         <div className="flex items-center gap-2 border-t border-line/70 px-2 py-1">
           <button type="button" onClick={stop} disabled={stopping}

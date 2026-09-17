@@ -16,7 +16,9 @@ import type { MilestoneView, ProjectActivity, ProjectMessage, ProjectRecord, Ses
 export type ExportFormat = "markdown" | "json";
 
 export type ProjectExport = {
-  kind: "project" | "session";
+  kind: "project" | "session" | "sessions";
+  /** which sessions a multi-session export covers */
+  sessionKeys?: string[];
   project: ProjectRecord;
   agents: { director: string; builder: string; reviewer: string };
   milestones: MilestoneView[];
@@ -72,9 +74,42 @@ export function buildSessionExport(projectId: string, key: string): ProjectExpor
   };
 }
 
+/**
+ * Several sessions in one export.
+ *
+ * Reading one session's log at a time is fine when you know which one you
+ * want; comparing what a Builder claimed against what its Reviewer found, or
+ * following a repair across a milestone, means holding several at once.
+ *
+ * An empty selection means every session — "export the logs" is the common
+ * ask, and making the caller list them all to get it would be silly.
+ */
+export function buildSessionsExport(projectId: string, keys: string[]): ProjectExport | null {
+  const base = buildProjectExport(projectId);
+  if (!base) return null;
+  const all = base.milestones.flatMap((m) => m.sessions.map((x) => x.key));
+  const wanted = keys.length ? all.filter((k) => keys.includes(k)) : all;
+  if (!wanted.length) return null;
+  return {
+    ...base,
+    kind: "sessions",
+    sessionKeys: wanted,
+    milestones: base.milestones
+      .map((m) => ({ ...m, sessions: m.sessions.filter((x) => wanted.includes(x.key)) }))
+      .filter((m) => m.sessions.length),
+    // the owner asked for session logs, not the Director conversation
+    messages: [],
+    activity: base.activity.filter((a) => wanted.some((k) => a.text.includes(k))),
+  };
+}
+
 export function fileName(b: ProjectExport, format: ExportFormat): string {
   const stamp = new Date(b.exportedAt).toISOString().slice(0, 16).replace(/[:T]/g, "-");
-  const base = b.session ? `${slug(b.project.title)}-${slug(b.session.key)}` : slug(b.project.title);
+  const base = b.session
+    ? `${slug(b.project.title)}-${slug(b.session.key)}`
+    : b.kind === "sessions"
+      ? `${slug(b.project.title)}-sessions${b.sessionKeys && b.sessionKeys.length <= 3 ? `-${b.sessionKeys.map(slug).join("-")}` : ""}`
+      : slug(b.project.title);
   return `${base}-${stamp}.${format === "json" ? "json" : "md"}`;
 }
 
@@ -188,6 +223,23 @@ export function toMarkdown(b: ProjectExport): string {
   out.push(`- **Exported:** ${time(b.exportedAt)}`);
   out.push("");
   out.push("## Goal", "", nest(p.goal, 2), "");
+
+  if (b.kind === "sessions") {
+    out.push(`## ${b.sessionKeys?.length ?? 0} session log(s)`, "", (b.sessionKeys ?? []).map((k) => `- ${k}`).join("\n"), "");
+    for (const m of b.milestones) {
+      for (const sess of m.sessions) {
+        out.push(`### ${m.key} — ${m.name}`, "");
+        out.push(...sessionToMarkdown(sess, b.agents.builder, b.agents.reviewer));
+        const mine = b.activity.filter((a) => a.text.includes(sess.key));
+        if (mine.length) {
+          out.push(`#### Engine log for ${sess.key}`, "");
+          for (const a of mine) out.push(`- \`${new Date(a.ts).toLocaleString()}\` **${a.kind}** — ${a.text}${a.detail ? `\n  > ${a.detail.replace(/\n/g, "\n  > ")}` : ""}`);
+          out.push("");
+        }
+      }
+    }
+    return out.join("\n");
+  }
 
   if (b.session) {
     out.push("## Session", "");
