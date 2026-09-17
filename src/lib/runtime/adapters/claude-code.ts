@@ -176,6 +176,13 @@ async function invoke(
     if (type === "assistant") {
       const content = ((ev.message as Record<string, unknown>)?.content ?? []) as Record<string, unknown>[];
       for (const b of content) {
+        // What the agent says between its tool calls — "now I'll check the
+        // tests", "that failed because…". Dropping it left a timeline of bare
+        // verbs with no account of why any of them happened.
+        if (b.type === "text") {
+          const text = String(b.text ?? "").trim();
+          if (text) req.emit?.event({ kind: "note", title: text.slice(0, 2_000), status: "done" });
+        }
         if (b.type === "tool_use") {
           const name = String(b.name ?? "");
           // self-recording Nexora servers (browser) log their own richer events

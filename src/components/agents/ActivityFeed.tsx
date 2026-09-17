@@ -3,7 +3,7 @@
 import { useState } from "react";
 import {
   TerminalSquare, FileEdit, Loader2, Sparkles, Activity, Brain, ChevronRight, ChevronDown, Plug,
-  Globe, MousePointerClick, Keyboard, MoveVertical, Clock, Camera, Scan, SquareTerminal, ListTree, Braces, Search, AppWindow, Download, Upload, BookOpen, Power, RefreshCw, ShieldCheck, ShieldAlert,
+  Globe, MousePointerClick, Keyboard, MoveVertical, Clock, Camera, Scan, SquareTerminal, ListTree, Braces, Search, AppWindow, Download, Upload, BookOpen, Power, RefreshCw, ShieldCheck, ShieldAlert, MessageSquare,
 } from "lucide-react";
 import type { ActivityEvent, ActivityKind, BrowserActionMeta } from "@/lib/activity";
 import { cn } from "@/lib/utils";
@@ -17,6 +17,7 @@ const ICONS: Record<ActivityKind, typeof Activity> = {
   status: Activity,
   model: Sparkles,
   browser: Globe,
+  note: MessageSquare,
 };
 
 /** The "Tool ·", "Shell ·", "Asked Claude" prefix, mirroring a build log. */
@@ -29,6 +30,7 @@ const LABELS: Record<ActivityKind, string> = {
   status: "Status",
   model: "",
   browser: "Browser",
+  note: "",
 };
 
 /** Per-action icons for browser rows (ported from Tandem's timeline). */
@@ -58,8 +60,20 @@ function duration(ms?: number): string {
 */
 
 const GROUPABLE = new Set<ActivityKind>(["command", "file", "tool", "browser"]);
+// "note" is deliberately absent: the narration is what makes a run readable,
+// so it is never folded away into a count.
 /** What a folded run of each kind is called. */
-const GROUP_VERB: Partial<Record<ActivityKind, string>> = { command: "command", file: "file change", tool: "tool call", browser: "browser step" };
+const GROUP_VERB: Partial<Record<ActivityKind, string>> = { command: "command", file: "file step", tool: "tool call", browser: "browser step" };
+
+/** Reading a file is not changing it — and saying so about a read-only
+ *  Reviewer implies it wrote to the repository, which it cannot. */
+const WRITES = /^(write|edit|multiedit|notebookedit|checkpoint|create|delete|move|rename)/i;
+function fileNoun(events: ActivityEvent[]): string {
+  const wrote = events.filter((e) => WRITES.test(e.title)).length;
+  if (wrote === 0) return "file read";
+  if (wrote === events.length) return "file change";
+  return "file step";
+}
 
 type Item =
   | { key: string; kind: "one"; e: ActivityEvent }
@@ -103,7 +117,7 @@ function GroupRow({ of, events, live, first }: { of: ActivityKind; events: Activ
   const failed = events.filter((e) => e.status === "failed").length;
   const running = events.some((e) => e.status === "running");
   const total = events.reduce((n, e) => n + (e.durationMs ?? 0), 0);
-  const noun = GROUP_VERB[of] ?? "step";
+  const noun = of === "file" ? fileNoun(events) : GROUP_VERB[of] ?? "step";
   const actor = events[0].actor;
   return (
     <div className={cn(!first && "border-t border-line/70", failed > 0 && "bg-danger/[0.07]")}>
@@ -116,7 +130,10 @@ function GroupRow({ of, events, live, first }: { of: ActivityKind; events: Activ
             {actor.name}
           </span>
         )}
-        <span className="truncate text-ink">{events.length} {noun}{events.length === 1 ? "" : "s"}</span>
+        <span className="shrink-0 text-ink">{events.length} {noun}{events.length === 1 ? "" : "s"}</span>
+        <span className="truncate font-mono text-[11px] text-ink-3" title={events.map((e) => subject(e) || e.title).join("\n")}>
+          {events.map((e) => subject(e) || e.title).filter(Boolean).slice(0, 3).join(" · ")}
+        </span>
         {failed > 0 && <span className="shrink-0 text-[11px] text-[#ff7d95]">{failed} failed</span>}
         {running && live && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-ceo pulse-ring" />}
         <span className="ml-auto shrink-0 num text-[11px] text-ink-3">{duration(total)}</span>
@@ -130,8 +147,42 @@ function GroupRow({ of, events, live, first }: { of: ActivityKind; events: Activ
   );
 }
 
+/** The thing a step acted on — the command, the path — shown beside the verb.
+ *  Without it a timeline reads "Bash · Bash · Bash" and says nothing. */
+function subject(e: ActivityEvent): string {
+  if (e.kind === "model" || e.kind === "browser" || e.kind === "note") return "";
+  const d = (e.detail ?? "").trim();
+  if (!d || d.startsWith("{")) return "";
+  return d.split("\n")[0].slice(0, 120);
+}
+
+/** What the agent said, in its own words, between the things it did. */
+function NoteRow({ e, first }: { e: ActivityEvent; first: boolean }) {
+  const [open, setOpen] = useState(false);
+  const long = e.title.length > 240;
+  return (
+    <div className={cn(!first && "border-t border-line/70", "px-2.5 py-2")}>
+      <div className="flex items-start gap-2">
+        {e.actor && (
+          <span className="mt-px shrink-0 rounded-md border px-1.5 py-px text-[10px] font-medium"
+            style={{ borderColor: `${ROLE_TINT[e.actor.role] ?? "#aab2c5"}55`, color: ROLE_TINT[e.actor.role] ?? "#aab2c5" }}>
+            {e.actor.name}
+          </span>
+        )}
+        <p className={cn("min-w-0 whitespace-pre-wrap text-[12.5px] leading-relaxed text-ink-2", !open && long && "line-clamp-3")}>{e.title}</p>
+      </div>
+      {long && (
+        <button type="button" onClick={() => setOpen((o) => !o)} className="mt-1 text-[10.5px] text-ink-3 hover:text-ink-2">
+          {open ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function ActivityRow({ e, live, first }: { e: ActivityEvent; live?: boolean; first: boolean }) {
   const [open, setOpen] = useState(false);
+  if (e.kind === "note") return <NoteRow e={e} first={first} />;
   const b = e.browser;
   const Icon = e.kind === "browser" ? BROWSER_ICONS[b?.action ?? ""] ?? Globe : ICONS[e.kind] ?? Activity;
   const label = LABELS[e.kind] ?? "";
@@ -168,7 +219,8 @@ function ActivityRow({ e, live, first }: { e: ActivityEvent; live?: boolean; fir
           </span>
         )}
         {label && <span className="shrink-0 text-ink-2">{label} ·</span>}
-        <span className={cn("truncate", e.kind === "model" || e.kind === "browser" ? "text-ink" : "font-mono text-[11.5px] text-ink")}>{e.title}</span>
+        <span className={cn("shrink-0", e.kind === "model" || e.kind === "browser" ? "text-ink" : "font-mono text-[11.5px] text-ink")}>{e.title}</span>
+        {subject(e) && <span className="truncate font-mono text-[11px] text-ink-3" title={subject(e)}>{subject(e)}</span>}
         {dedup && <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-operations/40 bg-operations/10 px-1.5 py-px text-[10px] text-operations"><ShieldCheck className="h-3 w-3" /> Already completed — duplicate prevented</span>}
         {uncertain && <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-warning/40 bg-warning/10 px-1.5 py-px text-[10px] text-warning"><ShieldAlert className="h-3 w-3" /> Outcome uncertain — not repeated</span>}
         {!dedup && !uncertain && g?.class === "FINANCIAL" && <span className="shrink-0 rounded-md border border-warning/40 px-1.5 py-px text-[10px] text-warning">financial</span>}

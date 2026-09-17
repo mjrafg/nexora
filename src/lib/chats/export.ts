@@ -149,6 +149,8 @@ export function toMarkdown(b: ChatExportBundle): string {
 }
 
 function activityToMarkdown(e: ActivityEvent): string[] {
+  // what the agent said reads as prose; what it did stays folded
+  if (e.kind === "note") return ["", e.title, ""];
   const head = `**${labelOf(e)}**${e.meta ? ` · ${e.meta}` : ""}${e.status ? ` · ${e.status}` : ""}${e.durationMs ? ` · ${dur(e.durationMs)}` : ""}`;
   const lines = [`<details><summary>${escapeHtml(head)} — ${escapeHtml(e.title)}</summary>`, ""];
   lines.push(`- Time: ${time(new Date(e.ts).toISOString())}`);
@@ -162,7 +164,7 @@ function activityToMarkdown(e: ActivityEvent): string[] {
 }
 
 function labelOf(e: ActivityEvent): string {
-  return { model: "Model call", tool: "Tool", command: "Command", file: "File", browser: "Browser", result: "Result", reasoning: "Reasoning", status: "Status" }[e.kind] ?? e.kind;
+  return { model: "Model call", tool: "Tool", command: "Command", file: "File", browser: "Browser", result: "Result", reasoning: "Reasoning", status: "Status", note: "Said" }[e.kind] ?? e.kind;
 }
 
 function toolCallToMarkdown(tc: ToolCallRecordLike): string[] {

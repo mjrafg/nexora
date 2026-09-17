@@ -9,7 +9,8 @@ import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import type { GuardInfo } from "@/lib/guard";
 
-export type ActivityKind = "status" | "tool" | "command" | "file" | "reasoning" | "result" | "model" | "browser";
+/** "note" is the agent talking: what it says between its tool calls. */
+export type ActivityKind = "status" | "tool" | "command" | "file" | "reasoning" | "result" | "model" | "browser" | "note";
 
 /** Sanitized browser action facts (ported from Tandem's BrowserActionPayload) — never cookies, storage or secrets. */
 export type BrowserActionMeta = {

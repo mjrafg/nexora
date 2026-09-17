@@ -135,6 +135,12 @@ async function invoke(
       else if (itype === "mcp_tool_call") req.emit?.event({ id: String(item.id ?? ""), kind: "tool", title: String(item.tool ?? "tool"), meta: String(item.server ?? "mcp"), detail: JSON.stringify(item.arguments ?? {}).slice(0, 500), status: "running" });
       else if (itype === "file_change") req.emit?.event({ id: String(item.id ?? ""), kind: "file", title: String(item.path ?? "file").slice(0, 120), meta: "File change", detail: String(item.path ?? "").slice(0, 300), status: "running" });
     } else if (ev.type === "item.completed") {
+      // what the agent says between the things it does; the last one is also
+      // the turn's reply, which is why it reads as the end of the narrative
+      if (itype === "agent_message") {
+        const text = String(item.text ?? "").trim();
+        if (text) req.emit?.event({ kind: "note", title: text.slice(0, 2_000), status: "done" });
+      }
       if (itype === "command_execution") req.emit?.event({ id: String(item.id ?? ""), kind: "command", title: String(item.command ?? "shell").slice(0, 120), meta: "Shell", detail: String(item.command ?? "").slice(0, 500), output: String(item.aggregated_output ?? item.output ?? "").slice(0, 2000), status: Number(item.exit_code ?? 0) === 0 ? "done" : "failed" });
       else if (itype === "mcp_tool_call") req.emit?.event({ id: String(item.id ?? ""), kind: "tool", title: String(item.tool ?? "tool"), meta: String(item.server ?? "mcp"), output: JSON.stringify(item.result ?? "").slice(0, 2000), status: item.status === "failed" ? "failed" : "done" });
       else if (itype === "file_change") req.emit?.event({ id: String(item.id ?? ""), kind: "file", title: String(item.path ?? "file").slice(0, 120), meta: "File change", detail: String(item.path ?? "").slice(0, 300), status: "done" });

@@ -95,11 +95,14 @@ function nest(text: string, under: number): string {
 
 const LABEL: Record<string, string> = {
   model: "Model call", tool: "Tool", command: "Command", file: "File",
-  browser: "Browser", result: "Result", reasoning: "Reasoning", status: "Status",
+  browser: "Browser", result: "Result", reasoning: "Reasoning", status: "Status", note: "Said",
 };
 
 function stepToMarkdown(e: ActivityEvent): string[] {
   const who = e.actor ? `${e.actor.name} (${e.actor.role})` : "Nexora";
+  // narration is the spine of the log, not an attachment to it: it reads as
+  // prose, while the things the agent did stay folded away until wanted
+  if (e.kind === "note") return [`**${who}:**`, "", nest(e.title, 3), ""];
   const head = `${who} · ${LABEL[e.kind] ?? e.kind}${e.meta ? ` · ${e.meta}` : ""}${e.status ? ` · ${e.status}` : ""}${e.durationMs ? ` · ${dur(e.durationMs)}` : ""}`;
   const lines = [`<details><summary>${escapeHtml(head)} — ${escapeHtml(e.title)}</summary>`, ""];
   lines.push(`- Time: ${new Date(e.ts).toLocaleString()}`);
