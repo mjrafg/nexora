@@ -46,6 +46,7 @@ import {
 import type { MilestoneInput, PendingRecovery, ProjectRecord, ReviewPolicy, SessionInput, SessionKind } from "./types";
 
 import { contradictsInPlaceTopology } from "./topology";
+import { reviewOutcome } from "./review-status";
 
 const KINDS = new Set(["build", "qa", "cleanup"]);
 const POLICIES = new Set(["required", "spot_check", "none"]);
@@ -615,9 +616,26 @@ export async function handleDirectorTool(projectId: string, name: string, args: 
             ].join("\n"),
           };
         }
+        /*
+         * What is actually being shipped, review-wise.
+         *
+         * Delivery is the last point at which "everything was checked" is
+         * still a correctable belief rather than something the owner has been
+         * told. Sessions the Director excused are its own decision and do not
+         * block; a review that started and never finished is not a decision
+         * anyone made, and is named separately.
+         */
+        const shipped = readDb().projectSessions.filter((x) => x.projectId === projectId && x.status === "completed");
+        const unreviewed = shipped.filter((x) => reviewOutcome(x) === "incomplete");
+        const byPolicy = shipped.filter((x) => reviewOutcome(x) === "skipped");
+        const coverage = [
+          unreviewed.length ? `NOT REVIEWED — the Reviewer never finished on: ${unreviewed.map((x) => x.key).join(", ")}. This work has not passed review; do not tell the owner it has.` : "",
+          byPolicy.length ? `No independent review by your own decision on: ${byPolicy.map((x) => x.key).join(", ")}.` : "",
+        ].filter(Boolean).join(" ");
+
         const r = await gitDeliver(p.rootPath, p.integrationBranch, p.baseBranch);
-        if (r.ok) addActivity(projectId, "delivery", r.message, swept.length ? `delivered with engine-checkpointed files the Director confirmed: ${swept.join(", ")}` : undefined);
-        return r.ok ? { ok: true, text: r.message } : { ok: false, error: r.message };
+        if (r.ok) addActivity(projectId, "delivery", r.message, [swept.length ? `delivered with engine-checkpointed files the Director confirmed: ${swept.join(", ")}` : "", coverage].filter(Boolean).join("\n") || undefined);
+        return r.ok ? { ok: true, text: coverage ? `${r.message}\n\nReview coverage of what you just delivered: ${coverage}` : r.message } : { ok: false, error: r.message };
       }
 
       case "complete_project": {

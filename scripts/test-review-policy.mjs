@@ -69,6 +69,7 @@ const mk = async (name, role) => {
   made.push(agent.id); return agent;
 };
 
+const roots = [root];
 let projectId = null;
 try {
   const dir = await mk(`REV Director ${tag}`, "Project Director");
@@ -169,6 +170,50 @@ try {
     return "integration · required · prior evidence supplied";
   });
 
+  await test("delivery states what it is shipping unreviewed", async () => {
+    /*
+     * Its own project and its own repository: the milestone above has a live
+     * integration session in the background, and a session that is still
+     * running legitimately blocks delivery — which would mask what is
+     * actually under test here, the sentence delivery hands back.
+     */
+    const droot = fs.mkdtempSync(path.join(os.tmpdir(), `nexora-del-${tag}-`));
+    const dgit = (...a) => execFileSync("git", a, { cwd: droot, encoding: "utf8" });
+    fs.writeFileSync(path.join(droot, "README.md"), "# delivery coverage\n");
+    dgit("init", "-q", "-b", "main"); dgit("config", "user.email", "d@nexora.local"); dgit("config", "user.name", "del test");
+    dgit("add", "-A"); dgit("commit", "-qm", "start");
+    roots.push(droot);
+
+    const { project: dp } = await api("/api/projects", { title: `Delivery coverage ${tag}`, rootPath: droot, goal: "Check what delivery says.", directorAgentId: dir.id, builderAgentId: bld.id, reviewerAgentId: rev.id });
+    await director(dp.id, "set_plan", { summary: "One.", milestones: [{ key: "M1", name: "Work", goal: "g", acceptance: "a", depends_on: [] }] });
+    await director(dp.id, "plan_sessions", { milestone: "M1", reasoning: "x", sessions: [
+      { key: "D1", name: "Reviewer gave out", purpose: "p", prompt: "do", depends_on: [], isolated: false, review_policy: "required" },
+      { key: "D2", name: "Excused", purpose: "p", prompt: "do", depends_on: [], isolated: false, review_policy: "none", review_why: "trivial" },
+      { key: "D3", name: "Properly reviewed", purpose: "p", prompt: "do", depends_on: [], isolated: false, review_policy: "required" },
+    ] });
+
+    const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "nexora.json"), "utf8"));
+    const proj = raw.projects.find((x) => x.id === dp.id);
+    proj.integrationBranch = "main";
+    proj.baseBranch = "main";
+    const outcome = { D1: "incomplete", D2: null, D3: "passed" };
+    for (const x of raw.projectSessions.filter((y) => y.projectId === dp.id)) {
+      x.status = "completed";
+      x.reviewStatus = outcome[x.key];
+    }
+    fs.writeFileSync(path.join(DATA_DIR, "nexora.json"), JSON.stringify(raw, null, 2));
+
+    const r = await director(dp.id, "deliver", { confirm_extra_files: true });
+    const text = `${r.text ?? ""}${r.error ?? ""}`;
+    const coverage = text.split("Review coverage of what you just delivered:")[1] ?? "";
+    assert(/NOT REVIEWED/.test(coverage), `delivery says nothing about the unreviewed session: ${text.slice(0, 260)}`);
+    assert(/\bD1\b/.test(coverage), "the session whose reviewer never finished is not named");
+    assert(/No independent review by your own decision[^.]*D2/.test(coverage), `the excused session is not named as the Director's own choice: ${coverage.slice(0, 200)}`);
+    assert(!/\bD3\b/.test(coverage), "a session that passed review was listed as unreviewed");
+    await api(`/api/projects/${dp.id}`, null, "DELETE").catch(() => {});
+    return coverage.trim().slice(0, 130);
+  });
+
   console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
 } finally {
   if (!KEEP) {
@@ -177,7 +222,7 @@ try {
       if (p.rootPath === root) await api(`/api/projects/${p.id}`, null, "DELETE").catch(() => {});
     }
     for (const id of made) await api(`/api/agents/${id}`, null, "DELETE").catch(() => {});
-    for (const d of [root, path.join(path.dirname(root), ".nexora-worktrees")]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* temp */ } }
+    for (const d of [...roots, path.join(path.dirname(root), ".nexora-worktrees")]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* temp */ } }
     console.log("cleaned up");
   } else console.log(`kept: project ${projectId} · repo ${root}`);
 }
